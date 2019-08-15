@@ -63,36 +63,46 @@ cpu_task.precede(px, py);
 k1.gather(px, py);
 k1.precede(sx, sy);*/
 
-h_pinx, h_piny, n_x, n_y;
+__global__ void k1(float* d_pinx, float* d_piny, size_t Nx, size_t Ny) {
+  if(threadIdx....)
+}
 
-class HTL {
-  
-  void* ptr;
-  size_t bytes;
+float* h_pinx, *h_piny, 
+size_t n_x, n_y;
 
-  // device number
+auto cpu_task1 = hf.host([](){});
+auto cpu_task2 = hf.host([](){});
+auto gpu_task1 = hf.pull(h_pinx, n_x);   // internally stores d_pinx, Nx
+auto gpu_task2 = hf.pull(h_piny, n_y);   // internally stores d_piny, Ny
 
-  std::vector<std::function<void()>> lineages;
-};
-
-auto cpu_task = tf.emplace([](){...});
-
-auto gpu_task1 = hf.emplace_vector(h_pinx, n_x);
-auto gpu_task2 = hf.emplace_vector(h_piny, n_y);
-auto pull1 = hf.pull(gpu_task1);
-auto pull2 = hf.pull(gpu_task2);
-auto k1 = hf.kernel(policy, compute_hpwl
-  span<int>(gpu_task1).data(), span<int>(gpu_task1).size(),
-  span<float>(gpu_task2).data(), span<float>(gpu_task2).size()
+__global__ void k2 (float* pinx, size_t N, float v, size_t other_value_from_cpu);
+gpu_task1.kernel(policy, k2,
+  [&other_value_from_cpu] (float* d_pinx, size_t N) {
+    return {d_ptr, N, 1.2, other_value_from_cpu};
+  }
 );
 
-cpu_task.precede(gpu_task1, gpu_task2);
+auto k1 = hf.kernel(policy, k1, 
+  dx, n_x, h_piny, n_y
+);
+// internally finds a way to call k1
 
-gpu_task1.precede(pull1);
-gpu_task2.precede(pull2);
+// make sure the kernel is called on the right device
+cudaSetDevice(1);
+k1<<< Nx/256, 256, Stream/* decided by scheduler */ >>>(d_pinx, d_piny, Nx, Ny);
 
-pull1.precede(k1);
-pull2.precede(k1);
+auto gpu_task1_1 = hf.push(h_pinx, n_x);
+auto gpu_task2_1 = hf.push(h_piny, n_y);
+
+cpu_task1.precede(gpu_task1);
+cpu_task2.precede(gpu_task2);
+gpu_task1.precede(k1);
+gpu_task2.precede(k1);
+k1.precede(gpu_task1_1);
+k2.precede(gpu_task2_1);
+
+hf::Executor executor(2, 3);
+executor.run(hf);
 
   //void* d_ptr;
   //size_t d_bytes;
