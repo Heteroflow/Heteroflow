@@ -6,11 +6,24 @@ __global__ void simple(float* X, size_t Nx, float* Y, size_t Ny) {
 
 int main() {
 
-  float* h_X; 
+  hf::TaskBase t1, t2, t3, t4;
+
+  t1.precede(&t2, &t2, &t3);
+
+  std::cout << t1.num_dependents() << " " << t1.num_successors() << std::endl;
+
+  float* h_X = nullptr; 
   float* h_Y;
+
+  //HF_THROW_IF(h_X == nullptr, "f---", h_X)
+  HF_CHECK_CUDA(cudaErrorInitializationError, "succeFFFFFF", h_X);
+  //success                            = cudaSuccess,
+  //missing_configuration              = cudaErrorMissingConfiguration,
+  //memory_allocation                  = cudaErrorMemoryAllocation,
+  //initialization_error               = cudaErrorInitializationError,
   
   // create a heteroflow
-  hf::Heteroflow hf;
+  /*hf::Heteroflow hf;
 
   auto new_X = hf.host([&](){ h_X = new float [32]; });
   auto new_Y = hf.host([&](){ h_Y = new float [64]; });
@@ -40,7 +53,7 @@ int main() {
   // create an executor
   hf::Executor executor;
   executor.run(hf);
-
+*/
   return 0;
 }
 
