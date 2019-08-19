@@ -18,8 +18,6 @@
 #include <numeric>
 #include <iomanip>
 #include <cassert>
-#include <optional>
-#include <variant>
 #include <cmath>
 
 namespace hf {

@@ -1,36 +1,24 @@
 #pragma once
 
-#include <iostream>
-#include <string>
-#include <atomic>
-#include <vector>
-#include <functional>
-
-#include "../facility/error.hpp"
+#include "graph.hpp"
 
 namespace hf {
 
-/**
-@class TaskBase
-
-@brief Base class from which all tasks are derived
-
-TaskBase manages common data members required for all tasks.
-
-*/
+// Class: TaskBase 
 class TaskBase {
-
+  
   friend class HostTask;
-  friend class KernelTask;
   friend class PullTask;
   friend class PushTask;
+  friend class KernelTask;
+  friend class FlowBuilder;
 
   public:
-    
+
     /**
-    @brief virtual destructor
+    @brief constructs an empty taskbase object
     */
-    virtual ~TaskBase() = default;
+    TaskBase() = default;
 
     /**
     @brief adds precedence links from this task to others
@@ -67,16 +55,27 @@ class TaskBase {
     */
     size_t num_dependents() const;
     
+    /**
+    @brief resets the task handle to point to nothing
+    */
+    void reset();
 
+    /**
+    @brief queries if the task handle is empty (true for empty)
+    */
+    bool empty() const;
+
+    /**
+    @brief queries if the task handle is empty (true for non-empty)
+    */
+    operator bool () const;
+  
   private:
 
-    std::string _name;
+    TaskBase(Node*);
 
-    std::vector<TaskBase*> _successors;
-    std::vector<TaskBase*> _dependents;
-    
-    std::atomic<int> _num_dependents {0};
-    
+    Node* _node {nullptr};
+   
     template <typename T>
     void _precede(T&&);
     
@@ -84,33 +83,40 @@ class TaskBase {
     void _precede(T&&, Rest&&...);
 };
 
+// Procedure
+inline TaskBase::TaskBase(Node* node) :
+  _node {node} {
+}
+
 // Procedure: name
 template <typename S>
 void TaskBase::name(S&& name) {
-  _name = std::forward<S>(name);
+  HF_THROW_IF(!_node, "can't assign name to an empty task");
+  _node->_name = std::forward<S>(name);
 }
 
 // Function: name
 inline const std::string& TaskBase::name() const {
-  return _name;
+  HF_THROW_IF(!_node, "can't query the name of an empty task");
+  return _node->_name;
 }
 
 // Function: num_successors
 inline size_t TaskBase::num_successors() const {
-  return _successors.size();
+  HF_THROW_IF(!_node, "empty task has no successors");
+  return _node->_successors.size();
 }
 
 // Function: num_dependents
 inline size_t TaskBase::num_dependents() const {
-  return _dependents.size();
+  HF_THROW_IF(!_node, "empty task has no dependents");
+  return _node->_dependents.size();
 }
 
 // Procedure: precede
 template <typename T>
 void TaskBase::_precede(T&& other) {
-  _successors.push_back(other);
-  other->_dependents.push_back(this);
-  other->_num_dependents.fetch_add(1, std::memory_order_relaxed);
+  _node->_precede(other._node);
 }
 
 // Procedure: _precede
@@ -120,96 +126,91 @@ void TaskBase::_precede(T&& task, Ts&&... others) {
   _precede(std::forward<Ts>(others)...);
 }
 
-// Function: precede
+// Procedure: _precede
 template <typename... Ts>
-void TaskBase::precede(Ts&&... tgts) {
-  //(_precede(tgts), ...);  C++17 fold expression
-  _precede(std::forward<Ts>(tgts)...);
+void TaskBase::precede(Ts&&... tasks) {
+  HF_THROW_IF(_node == nullptr, "empty task can't precede any tasks");
+  _precede(std::forward<Ts>(tasks)...);
+}
+
+// Procedure: reset
+inline void TaskBase::reset() {
+  _node = nullptr;
+}
+
+// Function: empty
+inline bool TaskBase::empty() const {
+  return _node == nullptr;
+}
+
+// Operator
+inline TaskBase::operator bool() const {
+  return _node != nullptr;
 }
 
 // ----------------------------------------------------------------------------
 
 // Class: HostTask
 class HostTask : public TaskBase {
+
+  friend class FlowBuilder;
   
   public:
-    
-    template <typename C>
-    HostTask(C&& callable);
 
+    HostTask() = default;
+    
   private:
 
+    HostTask(Node*);
 };
+
+inline HostTask::HostTask(Node* node) : 
+  TaskBase::TaskBase {node} {
+}
+
 
 // ----------------------------------------------------------------------------
 
 // PullTask
 class PullTask : public TaskBase {
 
-  public:
-    
-    template <typename T>
-    PullTask(const T* h_data, size_t h_size);
+  friend class FlowBuilder;
 
-    ~PullTask();
-      
+  public:
+
+    PullTask() = default;
+
   private:
     
-    const void* _h_data {nullptr};
-    void*       _d_data {nullptr};
-
-    size_t _h_bytes {0};
-    size_t _d_bytes {0};
+    PullTask(Node*);
 };
+
+inline PullTask::PullTask(Node* node) : 
+  TaskBase::TaskBase {node} {
+}
   
-template <typename T>
-PullTask::PullTask(const T* h_data, size_t h_size) : 
-  _h_data {h_data}, _h_bytes {h_size*sizeof(T)} {
-}
-
-inline PullTask::~PullTask() {
-  // TODO
-}
-
 // ----------------------------------------------------------------------------
 
 // Class: PushTask
 class PushTask : public TaskBase {
 
+  friend class FlowBuilder;
+
   public:
 
-    PushTask(void* target, PullTask& source, size_t size);
+    PushTask() = default;
 
   private:
 
-    void* _target {nullptr};
-    
-    PullTask& _source;
-
-    size_t _size {0};
+    PushTask(Node* node);
 };
 
-// Constructor
-inline PushTask::PushTask(void* target, PullTask& source, size_t size) : 
-  _target {target},
-  _source {source},
-  _size   {size}
-{
+inline PushTask::PushTask(Node* node) : 
+  TaskBase::TaskBase {node} {
 }
 
+
 // ----------------------------------------------------------------------------
-
-// Class: Heteroflow
-class Heteroflow {
-  
-  public:
-
-  private:
-
-    std::string _name;
-
-
-};
 
 
 }  // end of namespace hf -----------------------------------------------------

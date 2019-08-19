@@ -2,6 +2,3 @@
 
 #include "core/heteroflow.hpp"
 
-namespace hf {
-
-}

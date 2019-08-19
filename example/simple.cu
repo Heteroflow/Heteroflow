@@ -1,22 +1,44 @@
 #include <iostream>
 #include <heteroflow/heteroflow.hpp>
 
+#include <heteroflow/facility/variant.hpp>
+
 __global__ void simple(float* X, size_t Nx, float* Y, size_t Ny) {
 }
 
 int main() {
 
-  hf::TaskBase t1, t2, t3, t4;
+  //int count = 1;
+  //
+  //auto ret = ::cudaSetDevice(count);
 
-  t1.precede(&t2, &t2, &t3);
+  //HF_CHECK_CUDA(ret, "can't set device");
 
-  std::cout << t1.num_dependents() << " " << t1.num_successors() << std::endl;
+  //::cudaGetDevice(&count);
 
-  float* h_X = nullptr; 
-  float* h_Y;
+  //std::cout << count << std::endl;
+
+  float* data = new float [100];
+  size_t N = 100;
+
+  hf::FlowBuilder fb;
+
+  auto p1 = fb.host([](){});
+  auto p2 = fb.pull(data, N);
+  auto p3 = fb.push(data, p2, N);
+
+  //fb2.insert(p1) 
+
+  //assert(p1 && p2);
+
+  //p1.precede(p2);
+
+
+  //std::cout << t1.num_dependents() << " " 
+  //          << t1.num_successors() << std::endl;
 
   //HF_THROW_IF(h_X == nullptr, "f---", h_X)
-  HF_CHECK_CUDA(cudaErrorInitializationError, "succeFFFFFF", h_X);
+  //HF_CHECK_CUDA(cudaErrorInitializationError, "succeFFFFFF", h_X);
   //success                            = cudaSuccess,
   //missing_configuration              = cudaErrorMissingConfiguration,
   //memory_allocation                  = cudaErrorMemoryAllocation,
