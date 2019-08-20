@@ -41,33 +41,33 @@ class FlowBuilder {
 
     @tparam T data type of the host memory block
     
-    @param h_data the pointer to the beginning of the host memory block
-    @param h_size number of items of type T to pull
+    @param source the pointer to the beginning of the host memory block
+    @param N number of items of type T to pull
 
     @return PullTask handle
 
-    The number of bytes copied to gpu is sizeof(T)*h_size.
+    The number of bytes copied to gpu is sizeof(T)*N.
     It is users' responsibility to ensure the data type and the size are correct.
     */
     template <typename T>
-    PullTask pull(const T* h_data, size_t h_size);
+    PullTask pull(const T* source, size_t N);
     
     /**
     @brief creates a push task that copies a given gpu memory block to the host
     
     @tparam T data type of the host memory block
 
-    @param h_data the pointer to the beginning of the host memory block
+    @param target the pointer to the beginning of the host memory block
     @param source the source pull task that stores the gpu memory block
-    @param h_size number of items of type T to push
+    @param N number of items of type T to push
 
     @return PushTask handle
     
-    The number of bytes copied to the host is sizeof(T)*h_size. 
+    The number of bytes copied to the host is sizeof(T)*N. 
     It is users' responsibility to ensure the data type and the size are correct.
     */
     template <typename T>
-    PushTask push(T* h_data, PullTask source, size_t h_size);
+    PushTask push(T* target, PullTask source, size_t N);
     
     /**
     @brief creates a kernel task that launches a given kernel 
@@ -114,21 +114,21 @@ HostTask FlowBuilder::host(C&& callable) {
 
 // Function: pull
 template <typename T>
-PullTask FlowBuilder::pull(const T* h_data, size_t h_size) {
+PullTask FlowBuilder::pull(const T* source, size_t N) {
   _nodes.emplace_back(std::make_unique<Node>(
-    mpark::in_place_type_t<Node::Pull>{}, h_data, h_size
+    mpark::in_place_type_t<Node::Pull>{}, source, N
   ));
   return PullTask(_nodes.back().get());
 }
     
 // Function: push
 template <typename T>
-PushTask FlowBuilder::push(T* h_data, PullTask source, size_t h_size) {
+PushTask FlowBuilder::push(T* target, PullTask source, size_t N) {
 
   HF_THROW_IF(!source, "source pull task is empty");
 
   _nodes.emplace_back(std::make_unique<Node>(
-    mpark::in_place_type_t<Node::Push>{}, h_data, source._node, h_size
+    mpark::in_place_type_t<Node::Push>{}, target, source._node, N
   ));
 
   return PushTask(_nodes.back().get());

@@ -132,7 +132,7 @@ template <typename T>
 Node::Push::Push(T* tgt, Node* src, size_t N) : 
   h_data {tgt},
   source {src},
-  h_size {N} {
+  h_size {N * sizeof(T)} {
 }
     
 // ----------------------------------------------------------------------------
@@ -141,6 +141,13 @@ Node::Push::Push(T* tgt, Node* src, size_t N) :
 
 template <typename F, typename... ArgsT>
 Node::Kernel::Kernel(F&& func, ArgsT&&... args) {
+
+  using Traits = function_traits<F>;
+  static_assert(Traits::arity == 2,"");
+  static_assert(std::is_same<typename Traits::return_type,void>::value,"");
+  static_assert(std::is_same<typename Traits::argument<0>::type, size_t>::value, "");
+  //static_assert(std::is_same<Traits::argument<1>::type,int>::value,"");
+
   // TODO
   func<<<2, 2>>>(std::forward<ArgsT>(args)...);
 }

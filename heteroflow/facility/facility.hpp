@@ -1,5 +1,6 @@
 #pragma once
 
+#include "traits.hpp"
 #include "error.hpp"
 #include "variant.hpp"
 #include "optional.hpp"

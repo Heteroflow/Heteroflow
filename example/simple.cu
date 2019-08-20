@@ -1,5 +1,8 @@
 #include <iostream>
 #include <heteroflow/heteroflow.hpp>
+#include <boost/type_traits.hpp>
+#include <boost/function.hpp>
+#include <boost/typeof/std/utility.hpp>
 
 __global__ void simple(size_t Nx, size_t Ny) {
   printf(
@@ -10,6 +13,18 @@ __global__ void simple(size_t Nx, size_t Ny) {
 }
 
 int main() {
+
+  static_assert(hf::function_traits<decltype(simple)>::arity == 2);
+
+  static_assert(std::is_function<decltype(simple)>::value);
+
+  typedef BOOST_TYPEOF(simple) foo_type;;
+  typedef boost::function_traits<foo_type> function_traits;
+
+  std::cout << typeid(foo_type).name() << std::endl;
+  std::cout << function_traits::arity << std::endl;
+  std::cout << typeid(function_traits::arg1_type).name() << ",";
+  std::cout << typeid(function_traits::arg2_type).name() << std::endl;
   
 
   //int count = 1;

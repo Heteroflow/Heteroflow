@@ -12,6 +12,8 @@ namespace hf {
 The class defines a set of common methods used by all types of handles
 such as adding precedence links, querying data members, 
 changing the name, and so on.
+
+Users are not allowed to directly control such class.
 */
 class TaskBase {
   
@@ -221,14 +223,14 @@ class PullTask : public TaskBase {
 
     @tparam T data type of the host memory block
     
-    @param h_data the pointer to the beginning of the host memory block
-    @param h_size number of items of type T to pull
+    @param source the pointer to the beginning of the host memory block
+    @param N number of items of type T to pull
 
-    The number of bytes copied to gpu is equal to sizeof(T)*h_size.
+    The number of bytes copied to gpu is equal to sizeof(T)*N.
     It is users' responsibility to ensure the data type and the size are correct.
     */
     template <typename T>
-    void pull(const T* h_data, size_t size);
+    void pull(const T* source, size_t N);
 
   private:
     
@@ -242,12 +244,12 @@ inline PullTask::PullTask(Node* node) :
     
 // Procedure: pull
 template <typename T>
-void PullTask::pull(const T* h_data, size_t size) {
+void PullTask::pull(const T* source, size_t N) {
 
   HF_THROW_IF(!_node, "pull task is empty");
 
   auto& handle = nonstd::get<node_handle_t>(_node->_handle);
-  handle.h_data = h_data;
+  handle.h_data = source;
   handle.h_size = N * sizeof(T);
 }
   
@@ -270,6 +272,21 @@ class PushTask : public TaskBase {
     @brief constructs an empty push task handle
     */
     PushTask() = default;
+    
+    /**
+    @brief alters the host memory block to push from gpu
+    
+    @tparam T data type of the host memory block
+
+    @param target the pointer to the beginning of the host memory block
+    @param source the source pull task that stores the gpu memory block
+    @param N number of items of type T to push
+
+    The number of bytes to copy to the host is sizeof(T)*N. 
+    It is users' responsibility to ensure the data type and the size are correct.
+    */
+    template <typename T>
+    void push(T* target, PullTask source, size_t N);
 
   private:
 
@@ -280,7 +297,18 @@ inline PushTask::PushTask(Node* node) :
   TaskBase::TaskBase {node} {
 }
 
+template <typename T>
+void PushTask::push(T* target, PullTask source, size_t N) {
 
+  HF_THROW_IF(
+    !_node || !source, "both push and pull tasks should be non-empty"
+  );
+  
+  auto& handle = nonstd::get<node_handle_t>(_node->_handle);
+  handle.h_data = target,
+  handle.source = source._node;
+  handle.h_size = N * sizeof(T);
+}
 
 
 // ----------------------------------------------------------------------------
