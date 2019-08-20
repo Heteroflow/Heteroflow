@@ -2,7 +2,9 @@
 Parallel CPU-GPU Programming using Task-based Models
 
 :exclamation: Notice this is a working repository. A lot of things are under construction.
-However, once can visit the predecessor project [Cpp-Taskflow](https://github.com/cpp-taskflow/cpp-taskflow) to get a sense of Heteroflow's task programming model.
+One can visit our predecessor project 
+[Cpp-Taskflow](https://github.com/cpp-taskflow/cpp-taskflow) to get a sense of 
+Heteroflow's spirit.
 
 # Example
 
