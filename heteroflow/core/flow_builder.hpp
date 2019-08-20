@@ -13,6 +13,16 @@ namespace hf {
 class FlowBuilder {
 
   public:
+
+    /**
+    @brief creates a placeholder task
+
+    @tparam T task type (PullTask, PushTask, etc.)
+
+    @return task handle of type T
+    */
+    template <typename T>
+    T placeholder();
     
     /**
     @brief creates a host task from a given callable object
@@ -37,7 +47,7 @@ class FlowBuilder {
     @return PullTask handle
 
     The number of bytes copied to gpu is sizeof(T)*h_size.
-    It is users' responsibility to ensure the data type and size are correct.
+    It is users' responsibility to ensure the data type and the size are correct.
     */
     template <typename T>
     PullTask pull(const T* h_data, size_t h_size);
@@ -54,10 +64,25 @@ class FlowBuilder {
     @return PushTask handle
     
     The number of bytes copied to the host is sizeof(T)*h_size. 
-    It is users' responsibility to ensure the data type and size are correct.
+    It is users' responsibility to ensure the data type and the size are correct.
     */
     template <typename T>
     PushTask push(T* h_data, PullTask source, size_t h_size);
+    
+    /**
+    @brief creates a kernel task that launches a given kernel 
+
+    @tparam ArgsT... argument types
+
+    @param func kernel function
+    @param args... arguments to forward to the kernel function
+
+    @return KernelTask handle
+
+    The function performs default configuration to launch the kernel.
+    */
+    template <typename F, typename... ArgsT>
+    KernelTask kernel(F&& func, ArgsT&&... args);
 
     /**
     @brief clears the graph
@@ -68,6 +93,15 @@ class FlowBuilder {
 
     std::vector<std::unique_ptr<Node>> _nodes;
 };
+
+// Function: placeholder
+template <typename T>
+T FlowBuilder::placeholder() {
+  _nodes.emplace_back(std::make_unique<Node>(
+    mpark::in_place_type_t<typename T::node_handle_t>{}
+  ));
+  return T(_nodes.back().get());
+}
 
 // Function: host
 template <typename C>
@@ -91,13 +125,24 @@ PullTask FlowBuilder::pull(const T* h_data, size_t h_size) {
 template <typename T>
 PushTask FlowBuilder::push(T* h_data, PullTask source, size_t h_size) {
 
-  HF_THROW_IF(!source, "source pull task is an empty task");
+  HF_THROW_IF(!source, "source pull task is empty");
 
   _nodes.emplace_back(std::make_unique<Node>(
     mpark::in_place_type_t<Node::Push>{}, h_data, source._node, h_size
   ));
 
   return PushTask(_nodes.back().get());
+}
+
+// Function: kernel    
+template <typename F, typename... ArgsT>
+KernelTask FlowBuilder::kernel(F&& func, ArgsT&&... args) {
+
+  _nodes.emplace_back(std::make_unique<Node>(
+    mpark::in_place_type_t<Node::Kernel>{}, func, std::forward<ArgsT>(args)...
+  ));
+  
+  return KernelTask(_nodes.back().get());
 }
 
 // Procedure: clear

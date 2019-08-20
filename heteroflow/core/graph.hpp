@@ -1,23 +1,23 @@
 #pragma once
 
-#include <iostream>
-#include <string>
-#include <atomic>
-#include <vector>
-#include <functional>
-
-#include "../facility/variant.hpp"
-#include "../facility/error.hpp"
+#include "../facility/facility.hpp"
 
 namespace hf {
 
+// Class: Node
 class Node {
 
   friend class TaskBase;
+  friend class HostTask;
+  friend class PullTask;
+  friend class PushTask;
+  friend class KernelTask;
   friend class FlowBuilder;
   
   // Host data
   struct Host {
+
+    Host() = default;
 
     template <typename C>
     Host(C&&);
@@ -27,6 +27,8 @@ class Node {
   
   // Pull data
   struct Pull {
+
+    Pull() = default;
 
     template <typename T>
     Pull(const T*, size_t);
@@ -43,6 +45,8 @@ class Node {
   // Push data
   struct Push {
 
+    Push() = default;
+
     template <typename T>
     Push(T*, Node*, size_t);
 
@@ -53,11 +57,20 @@ class Node {
   
   // Kernel data
   struct Kernel {
+
+    Kernel() = default;
+
+    template <typename F, typename... ArgsT>
+    Kernel(F&&, ArgsT&&...);
+
+    int device {0};
+    ::dim3 grid;
+    ::dim3 block;
+    size_t shm_size {0};
+    cudaStream_t stream;
   };
 
   public:
-
-    Node() = default;
 
     template <typename... ArgsT>
     Node(ArgsT&&...);
@@ -71,7 +84,7 @@ class Node {
     
     std::string _name;
 
-    mpark::variant<Host, Pull, Push, Kernel> _handle;
+    nonstd::variant<Host, Pull, Push, Kernel> _handle;
 
     std::vector<Node*> _successors;
     std::vector<Node*> _dependents;
@@ -120,6 +133,16 @@ Node::Push::Push(T* tgt, Node* src, size_t N) :
   h_data {tgt},
   source {src},
   h_size {N} {
+}
+    
+// ----------------------------------------------------------------------------
+// Kernel field
+// ----------------------------------------------------------------------------
+
+template <typename F, typename... ArgsT>
+Node::Kernel::Kernel(F&& func, ArgsT&&... args) {
+  // TODO
+  func<<<2, 2>>>(std::forward<ArgsT>(args)...);
 }
 
 // ----------------------------------------------------------------------------

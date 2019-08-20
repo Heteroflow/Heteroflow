@@ -1,12 +1,16 @@
 #include <iostream>
 #include <heteroflow/heteroflow.hpp>
 
-#include <heteroflow/facility/variant.hpp>
-
-__global__ void simple(float* X, size_t Nx, float* Y, size_t Ny) {
+__global__ void simple(size_t Nx, size_t Ny) {
+  printf(
+    "Hello from block %d, thread %d (%lux%lu)\n", 
+    blockIdx.x, threadIdx.x,
+    Nx, Ny
+  );
 }
 
 int main() {
+  
 
   //int count = 1;
   //
@@ -21,11 +25,27 @@ int main() {
   float* data = new float [100];
   size_t N = 100;
 
-  hf::FlowBuilder fb;
+  hf::Heteroflow hf;
 
-  auto p1 = fb.host([](){});
-  auto p2 = fb.pull(data, N);
-  auto p3 = fb.push(data, p2, N);
+  auto p0 = hf.placeholder<hf::KernelTask>();
+  auto p1 = hf.host([](){});
+  auto p2 = hf.pull(data, N);
+  auto p3 = hf.push(data, p2, N);
+  auto p4 = hf.kernel(simple, 8, 2); 
+
+  //simple<<<2, 2>>>(8, 2);
+  p4.grid({1, 2, 3});
+  p4.grid_x(10);
+  std::cout << p4.grid_x() << std::endl;
+  std::cout << p4.grid_y() << std::endl;
+  std::cout << p4.grid_z() << std::endl;
+  p4.block({1, 2, 3});
+  p4.block_x(10);
+  std::cout << p4.block_x() << std::endl;
+  std::cout << p4.block_y() << std::endl;
+  std::cout << p4.block_z() << std::endl;
+
+  cudaDeviceSynchronize();
 
   //fb2.insert(p1) 
 
