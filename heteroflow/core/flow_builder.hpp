@@ -98,7 +98,7 @@ class FlowBuilder {
 template <typename T>
 T FlowBuilder::placeholder() {
   _nodes.emplace_back(std::make_unique<Node>(
-    mpark::in_place_type_t<typename T::node_handle_t>{}
+    nonstd::in_place_type_t<typename T::node_handle_t>{}
   ));
   return T(_nodes.back().get());
 }
@@ -106,9 +106,13 @@ T FlowBuilder::placeholder() {
 // Function: host
 template <typename C>
 HostTask FlowBuilder::host(C&& callable) {
+
   _nodes.emplace_back(std::make_unique<Node>(
-    mpark::in_place_type_t<Node::Host>{}, std::forward<C>(callable)
+    nonstd::in_place_type_t<Node::Host>{}
   ));
+
+  _nodes.back()->_work = std::forward<C>(callable);
+
   return HostTask(_nodes.back().get());
 }
 
@@ -116,7 +120,7 @@ HostTask FlowBuilder::host(C&& callable) {
 template <typename T>
 PullTask FlowBuilder::pull(const T* source, size_t N) {
   _nodes.emplace_back(std::make_unique<Node>(
-    mpark::in_place_type_t<Node::Pull>{}, source, N
+    nonstd::in_place_type_t<Node::Pull>{}, source, N
   ));
   return PullTask(_nodes.back().get());
 }
@@ -128,7 +132,7 @@ PushTask FlowBuilder::push(T* target, PullTask source, size_t N) {
   HF_THROW_IF(!source, "source pull task is empty");
 
   _nodes.emplace_back(std::make_unique<Node>(
-    mpark::in_place_type_t<Node::Push>{}, target, source._node, N
+    nonstd::in_place_type_t<Node::Push>{}, target, source._node, N
   ));
 
   return PushTask(_nodes.back().get());
@@ -137,10 +141,22 @@ PushTask FlowBuilder::push(T* target, PullTask source, size_t N) {
 // Function: kernel    
 template <typename F, typename... ArgsT>
 KernelTask FlowBuilder::kernel(F&& func, ArgsT&&... args) {
+  
+  using Traits = function_traits<F>;
+  static_assert(Traits::arity == sizeof...(args), "arguments arity mismatch");
 
+  static_assert(nonstd::is_same_v<typename Traits::return_type, void>,"");
+  static_assert(nonstd::is_same_v<typename Traits::argument_t<0>, size_t>, "");
+  
   _nodes.emplace_back(std::make_unique<Node>(
-    mpark::in_place_type_t<Node::Kernel>{}, func, std::forward<ArgsT>(args)...
+    nonstd::in_place_type_t<Node::Kernel>{}
   ));
+
+  ////func<<<2, 2>>>(std::forward<ArgsT>(args)...);
+  //_nodes._work = [func, args...] () {
+  func<<<2, 2>>>(2, 2);
+  //  invoke_kernel(func, args...);
+  //}
   
   return KernelTask(_nodes.back().get());
 }

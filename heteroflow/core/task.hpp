@@ -195,7 +195,7 @@ inline HostTask::HostTask(Node* node) :
 template <typename C>
 void HostTask::work(C&& callable) {
   HF_THROW_IF(!_node, "host task is empty");
-  nonstd::get<node_handle_t>(_node->_handle).work = std::forward<C>(callable);
+  _node->_work = std::forward<C>(callable);
 }
 
 // ----------------------------------------------------------------------------
@@ -208,6 +208,9 @@ void HostTask::work(C&& callable) {
 class PullTask : public TaskBase {
 
   friend class FlowBuilder;
+  
+  template <typename T>
+  friend T kernel_forward(PullTask);
   
   using node_handle_t = Node::Pull;
 
@@ -231,10 +234,12 @@ class PullTask : public TaskBase {
     */
     template <typename T>
     void pull(const T* source, size_t N);
-
+    
   private:
     
     PullTask(Node*);
+    
+    void* _d_data();
 };
 
 // Constructor
@@ -251,6 +256,12 @@ void PullTask::pull(const T* source, size_t N) {
   auto& handle = nonstd::get<node_handle_t>(_node->_handle);
   handle.h_data = source;
   handle.h_size = N * sizeof(T);
+}
+
+// Function: d_data
+inline void* PullTask::_d_data() {
+  HF_THROW_IF(!_node, "pull task is empty");
+  return nonstd::get<node_handle_t>(_node->_handle).d_data;
 }
   
 // ----------------------------------------------------------------------------
@@ -516,6 +527,30 @@ inline const ::dim3& KernelTask::block() const {
   HF_THROW_IF(!_node, "kernel task is empty");
   return nonstd::get<node_handle_t>(_node->_handle).block;
 }
+
+// ----------------------------------------------------------------------------
+
+/*template <typename T>
+T kernel_forward(PullTask pull) {
+  return pull._d_data();
+}
+
+template <typename T>
+nonstd::enable_if_t<!nonstd::is_same_v<nonstd::decay_t<T>, PullTask>, T>&&
+kernel_forward(nonstd::remove_reference_t<T>& t) noexcept {
+  return static_cast<T&&>(t);
+}
+
+template <typename T>
+nonstd::enable_if_t<!nonstd::is_same_v<nonstd::decay_t<T>, PullTask>, T>&&
+kernel_forward(nonstd::remove_reference_t<T>&& t) noexcept {
+  static_assert(
+    !std::is_lvalue_reference<T>::value,
+    "can not forward an rvalue as an lvalue"
+  );
+  return static_cast<T&&>(t);
+}*/
+
 
 }  // end of namespace hf -----------------------------------------------------
 

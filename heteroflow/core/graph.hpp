@@ -16,13 +16,6 @@ class Node {
   
   // Host data
   struct Host {
-
-    Host() = default;
-
-    template <typename C>
-    Host(C&&);
-
-    std::function<void()> work;
   };
   
   // Pull data
@@ -40,7 +33,8 @@ class Node {
     void*  d_data {nullptr};
     size_t h_size {0};
     size_t d_size {0};
-  };
+    cudaStream_t stream;
+  };  
   
   // Push data
   struct Push {
@@ -49,19 +43,18 @@ class Node {
 
     template <typename T>
     Push(T*, Node*, size_t);
-
+    
+    int device {0};
     void* h_data {nullptr};
     Node* source {nullptr};
     size_t h_size {0};
+    cudaStream_t stream;
   };
   
   // Kernel data
   struct Kernel {
 
     Kernel() = default;
-
-    template <typename F, typename... ArgsT>
-    Kernel(F&&, ArgsT&&...);
 
     int device {0};
     ::dim3 grid;
@@ -86,6 +79,8 @@ class Node {
 
     nonstd::variant<Host, Pull, Push, Kernel> _handle;
 
+    std::function<void()> _work;
+
     std::vector<Node*> _successors;
     std::vector<Node*> _dependents;
     
@@ -97,12 +92,6 @@ class Node {
 // ----------------------------------------------------------------------------
 // Host field
 // ----------------------------------------------------------------------------
-
-// Constructor
-template <typename C>
-Node::Host::Host(C&& callable) : 
-  work {std::forward<C>(callable)} {
-}
 
 // ----------------------------------------------------------------------------
 // Pull field
@@ -138,19 +127,6 @@ Node::Push::Push(T* tgt, Node* src, size_t N) :
 // ----------------------------------------------------------------------------
 // Kernel field
 // ----------------------------------------------------------------------------
-
-template <typename F, typename... ArgsT>
-Node::Kernel::Kernel(F&& func, ArgsT&&... args) {
-
-  using Traits = function_traits<F>;
-  static_assert(Traits::arity == 2,"");
-  static_assert(std::is_same<typename Traits::return_type,void>::value,"");
-  static_assert(std::is_same<typename Traits::argument<0>::type, size_t>::value, "");
-  //static_assert(std::is_same<Traits::argument<1>::type,int>::value,"");
-
-  // TODO
-  func<<<2, 2>>>(std::forward<ArgsT>(args)...);
-}
 
 // ----------------------------------------------------------------------------
 

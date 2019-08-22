@@ -1,8 +1,29 @@
 #include <iostream>
 #include <heteroflow/heteroflow.hpp>
-#include <boost/type_traits.hpp>
-#include <boost/function.hpp>
-#include <boost/typeof/std/utility.hpp>
+/*
+struct A {
+  void* ptr;
+  void* get() { return ptr; }
+};
+
+void simple2(float* Pinx, size_t N) { std::cout << "hi\n"; }
+// need a invoke_kernel function to do the following:
+A a;
+size_t n = 8;
+invoke_kernel(simple2, a, 8);
+
+template <typename S, typename T>
+auto convert(T&& item) {
+  if constexpr(std::is_same_v<T, PullTask>) {
+    return static_cast<S>(itme.get());
+  }
+  else return static_cast<S>(item);
+}
+
+template <typename F, typename... ArgsT>
+auto invoke_kernel(F&& f, ArgsT&&... args) {
+  //std::invoke(f, convert(args)...);
+} */
 
 __global__ void simple(size_t Nx, size_t Ny) {
   printf(
@@ -14,29 +35,6 @@ __global__ void simple(size_t Nx, size_t Ny) {
 
 int main() {
 
-  static_assert(hf::function_traits<decltype(simple)>::arity == 2);
-
-  static_assert(std::is_function<decltype(simple)>::value);
-
-  typedef BOOST_TYPEOF(simple) foo_type;;
-  typedef boost::function_traits<foo_type> function_traits;
-
-  std::cout << typeid(foo_type).name() << std::endl;
-  std::cout << function_traits::arity << std::endl;
-  std::cout << typeid(function_traits::arg1_type).name() << ",";
-  std::cout << typeid(function_traits::arg2_type).name() << std::endl;
-  
-
-  //int count = 1;
-  //
-  //auto ret = ::cudaSetDevice(count);
-
-  //HF_CHECK_CUDA(ret, "can't set device");
-
-  //::cudaGetDevice(&count);
-
-  //std::cout << count << std::endl;
-
   float* data = new float [100];
   size_t N = 100;
 
@@ -46,7 +44,7 @@ int main() {
   auto p1 = hf.host([](){});
   auto p2 = hf.pull(data, N);
   auto p3 = hf.push(data, p2, N);
-  auto p4 = hf.kernel(simple, 8, 2); 
+  auto p4 = hf.kernel(simple, 8, p2); 
 
   //simple<<<2, 2>>>(8, 2);
   p4.grid({1, 2, 3});
