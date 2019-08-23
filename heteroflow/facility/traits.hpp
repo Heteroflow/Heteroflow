@@ -48,13 +48,14 @@ template<typename R, typename... Args>
 struct function_traits<R(Args...)> {
 
   using return_type = R;
+  using argument_tuple_type = std::tuple<Args...>;
  
   static constexpr size_t arity = sizeof...(Args);
  
   template <size_t N>
   struct argument {
     static_assert(N < arity, "error: invalid parameter index.");
-    using type = std::tuple_element_t<N,std::tuple<Args...>>;
+    using type = std::tuple_element_t<N, std::tuple<Args...>>;
   };
 
   template <size_t N>

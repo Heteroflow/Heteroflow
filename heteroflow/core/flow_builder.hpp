@@ -110,7 +110,8 @@ HostTask FlowBuilder::host(C&& callable) {
   _nodes.emplace_back(std::make_unique<Node>(
     nonstd::in_place_type_t<Node::Host>{}
   ));
-
+  
+  // assign the work
   _nodes.back()->_work = std::forward<C>(callable);
 
   return HostTask(_nodes.back().get());
@@ -142,23 +143,28 @@ PushTask FlowBuilder::push(T* target, PullTask source, size_t N) {
 template <typename F, typename... ArgsT>
 KernelTask FlowBuilder::kernel(F&& func, ArgsT&&... args) {
   
-  using Traits = function_traits<F>;
-  static_assert(Traits::arity == sizeof...(args), "arguments arity mismatch");
+  static_assert(
+    function_traits<F>::arity == sizeof...(args), 
+    "arguments arity mismatch"
+  );
 
-  static_assert(nonstd::is_same_v<typename Traits::return_type, void>,"");
-  static_assert(nonstd::is_same_v<typename Traits::argument_t<0>, size_t>, "");
-  
   _nodes.emplace_back(std::make_unique<Node>(
     nonstd::in_place_type_t<Node::Kernel>{}
   ));
 
-  ////func<<<2, 2>>>(std::forward<ArgsT>(args)...);
-  //_nodes._work = [func, args...] () {
-  func<<<2, 2>>>(2, 2);
-  //  invoke_kernel(func, args...);
-  //}
+  auto& node = _nodes.back();
   
-  return KernelTask(_nodes.back().get());
+  // assign the work
+  node->_work = [node=node.get(), func, args...] () {
+    auto& h = node->_kernel_handle();
+    func<<<h.grid, h.block, h.shm, h.stream>>>(
+      to_kernel_argument(args)...
+    );
+  };
+
+  node->_work();
+  
+  return KernelTask(node.get());
 }
 
 // Procedure: clear

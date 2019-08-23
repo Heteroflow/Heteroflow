@@ -4,6 +4,9 @@
 
 namespace hf {
 
+// forward declaration
+struct PointerCaster;
+
 /**
 @class TaskBase
 
@@ -209,8 +212,7 @@ class PullTask : public TaskBase {
 
   friend class FlowBuilder;
   
-  template <typename T>
-  friend T kernel_forward(PullTask);
+  friend PointerCaster to_kernel_argument(PullTask);
   
   using node_handle_t = Node::Pull;
 
@@ -260,7 +262,6 @@ void PullTask::pull(const T* source, size_t N) {
 
 // Function: d_data
 inline void* PullTask::_d_data() {
-  HF_THROW_IF(!_node, "pull task is empty");
   return nonstd::get<node_handle_t>(_node->_handle).d_data;
 }
   
@@ -320,7 +321,6 @@ void PushTask::push(T* target, PullTask source, size_t N) {
   handle.source = source._node;
   handle.h_size = N * sizeof(T);
 }
-
 
 // ----------------------------------------------------------------------------
 
@@ -530,27 +530,15 @@ inline const ::dim3& KernelTask::block() const {
 
 // ----------------------------------------------------------------------------
 
-/*template <typename T>
-T kernel_forward(PullTask pull) {
-  return pull._d_data();
+template <typename T>
+auto to_kernel_argument(T&& t) -> decltype(std::forward<T>(t)) { 
+  return std::forward<T>(t); 
 }
 
-template <typename T>
-nonstd::enable_if_t<!nonstd::is_same_v<nonstd::decay_t<T>, PullTask>, T>&&
-kernel_forward(nonstd::remove_reference_t<T>& t) noexcept {
-  return static_cast<T&&>(t);
+inline PointerCaster to_kernel_argument(PullTask task) { 
+  HF_THROW_IF(!task, "pull task is empty");
+  return PointerCaster{task._d_data()}; 
 }
-
-template <typename T>
-nonstd::enable_if_t<!nonstd::is_same_v<nonstd::decay_t<T>, PullTask>, T>&&
-kernel_forward(nonstd::remove_reference_t<T>&& t) noexcept {
-  static_assert(
-    !std::is_lvalue_reference<T>::value,
-    "can not forward an rvalue as an lvalue"
-  );
-  return static_cast<T&&>(t);
-}*/
-
 
 }  // end of namespace hf -----------------------------------------------------
 

@@ -41,5 +41,18 @@ constexpr std::size_t va_count(Args&&...) {
   return sizeof...(Args); 
 }
 
+// PointerCaster
+struct PointerCaster {
+
+  void* d_data {nullptr};
+  
+  template <typename T>  
+  operator T* ();
+};
+
+template <typename T>
+PointerCaster::operator T*() {
+  return (T*) d_data;
+}
 
 }  // end of namespace hf -----------------------------------------------------
