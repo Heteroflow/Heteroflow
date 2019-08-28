@@ -5,7 +5,12 @@
 namespace hf {
 
 // forward declaration
-struct PointerCaster;
+class PushTask;
+class PullTask;
+class HostTask;
+class KernelTask;
+
+// ----------------------------------------------------------------------------
 
 /**
 @class TaskBase
@@ -18,36 +23,12 @@ changing the name, and so on.
 
 Users are not allowed to directly control such class.
 */
+
+template <typename Derived>
 class TaskBase {
-  
-  friend class HostTask;
-  friend class PullTask;
-  friend class PushTask;
-  friend class KernelTask;
-  friend class FlowBuilder;
 
   public:
 
-    /**
-    @brief adds precedence links from this task to others
-
-    @tparam Ts... task parameter pack
-
-    @param tasks one or multiple tasks
-    */
-    template <typename... Ts>
-    void precede(Ts&&... tasks);
-    
-    /**
-    @brief assigns a name to the task
-    
-    @tparam S string type
-
-    @param name a @std_string acceptable string
-    */
-    template <typename S>
-    void name(S&& name);
-    
     /**
     @brief queries the name of the task
     */
@@ -64,11 +45,6 @@ class TaskBase {
     size_t num_dependents() const;
     
     /**
-    @brief resets the task handle to point to nothing
-    */
-    void reset();
-
-    /**
     @brief queries if the task handle is empty (true for empty)
     */
     bool empty() const;
@@ -77,8 +53,32 @@ class TaskBase {
     @brief queries if the task handle is empty (true for non-empty)
     */
     operator bool () const;
-  
-  private:
+
+    /**
+    @brief adds precedence links from this task to others
+
+    @tparam Ts... task parameter pack
+
+    @param tasks tasks to precede
+    
+    @return task handle (derived type)
+    */
+    template <typename... Ts>
+    Derived precede(Ts&&... tasks);
+
+    /**
+    @brief assigns a name to the task
+    
+    @tparam S string type
+
+    @param name a @std_string acceptable string
+    
+    @return task handle (derived type)
+    */
+    template <typename S>
+    Derived name(S&& name);
+    
+  protected:
     
     TaskBase(Node*);
 
@@ -92,68 +92,74 @@ class TaskBase {
 };
 
 // Procedure
-inline TaskBase::TaskBase(Node* node) :
+template <typename Derived>
+inline TaskBase<Derived>::TaskBase(Node* node) :
   _node {node} {
 }
 
-// Procedure: name
-template <typename S>
-void TaskBase::name(S&& name) {
-  HF_THROW_IF(!_node, "can't assign name to an empty task");
-  _node->_name = std::forward<S>(name);
-}
-
 // Function: name
-inline const std::string& TaskBase::name() const {
+template <typename Derived>
+inline const std::string& TaskBase<Derived>::name() const {
   HF_THROW_IF(!_node, "can't query the name of an empty task");
   return _node->_name;
 }
 
 // Function: num_successors
-inline size_t TaskBase::num_successors() const {
+template <typename Derived>
+inline size_t TaskBase<Derived>::num_successors() const {
   HF_THROW_IF(!_node, "empty task has no successors");
   return _node->_successors.size();
 }
 
 // Function: num_dependents
-inline size_t TaskBase::num_dependents() const {
+template <typename Derived>
+inline size_t TaskBase<Derived>::num_dependents() const {
   HF_THROW_IF(!_node, "empty task has no dependents");
   return _node->_dependents.size();
 }
 
 // Procedure: precede
+template <typename Derived>
 template <typename T>
-void TaskBase::_precede(T&& other) {
+void TaskBase<Derived>::_precede(T&& other) {
   _node->_precede(other._node);
 }
 
 // Procedure: _precede
+template <typename Derived>
 template <typename T, typename... Ts>
-void TaskBase::_precede(T&& task, Ts&&... others) {
+void TaskBase<Derived>::_precede(T&& task, Ts&&... others) {
   _precede(std::forward<T>(task));
   _precede(std::forward<Ts>(others)...);
 }
 
-// Procedure: _precede
-template <typename... Ts>
-void TaskBase::precede(Ts&&... tasks) {
-  HF_THROW_IF(_node == nullptr, "empty task can't precede any tasks");
-  _precede(std::forward<Ts>(tasks)...);
-}
-
-// Procedure: reset
-inline void TaskBase::reset() {
-  _node = nullptr;
-}
-
 // Function: empty
-inline bool TaskBase::empty() const {
+template <typename Derived>
+inline bool TaskBase<Derived>::empty() const {
   return _node == nullptr;
 }
 
 // Operator
-inline TaskBase::operator bool() const {
+template <typename Derived>
+inline TaskBase<Derived>::operator bool() const {
   return _node != nullptr;
+}
+
+// Procedure: name
+template <typename Derived>
+template <typename S>
+Derived TaskBase<Derived>::name(S&& name) {
+  HF_THROW_IF(!_node, "task is empty");
+  _node->_name = std::forward<S>(name);
+  return Derived(_node);
+}
+
+template <typename Derived>
+template <typename... Ts>
+Derived TaskBase<Derived>::precede(Ts&&... tasks) {
+  HF_THROW_IF(!_node, "task is empty");
+  _precede(std::forward<Ts>(tasks)...);
+  return Derived(_node);
 }
 
 // ----------------------------------------------------------------------------
@@ -163,7 +169,12 @@ inline TaskBase::operator bool() const {
 
 @brief the handle to a host (cpu) task
 */
-class HostTask : public TaskBase {
+class HostTask : public TaskBase<HostTask> {
+  
+  friend class TaskBase<HostTask>;
+  friend class TaskBase<PullTask>;
+  friend class TaskBase<PushTask>;
+  friend class TaskBase<KernelTask>;
 
   friend class FlowBuilder;
 
@@ -184,7 +195,7 @@ class HostTask : public TaskBase {
     @param callable a callable object acceptable to std::function
     */
     template <typename C>
-    void work(C&& callable);
+    HostTask work(C&& callable);
     
   private:
 
@@ -196,9 +207,10 @@ inline HostTask::HostTask(Node* node) :
 }
 
 template <typename C>
-void HostTask::work(C&& callable) {
+HostTask HostTask::work(C&& callable) {
   HF_THROW_IF(!_node, "host task is empty");
   _node->_work = std::forward<C>(callable);
+  return *this;
 }
 
 // ----------------------------------------------------------------------------
@@ -208,7 +220,15 @@ void HostTask::work(C&& callable) {
 
 @brief the handle to a pull task
 */
-class PullTask : public TaskBase {
+class PullTask : public TaskBase<PullTask> {
+  
+  friend class TaskBase<HostTask>;
+  friend class TaskBase<PullTask>;
+  friend class TaskBase<PushTask>;
+  friend class TaskBase<KernelTask>;
+  
+  friend class KernelTask;
+  friend class PushTask;
 
   friend class FlowBuilder;
   
@@ -226,16 +246,10 @@ class PullTask : public TaskBase {
     /**
     @brief alters the host memory block to copy to gpu
 
-    @tparam T data type of the host memory block
-    
     @param source the pointer to the beginning of the host memory block
-    @param N number of items of type T to pull
-
-    The number of bytes copied to gpu is equal to sizeof(T)*N.
-    It is users' responsibility to ensure the data type and the size are correct.
+    @param N number of bytes to pull
     */
-    template <typename T>
-    void pull(const T* source, size_t N);
+    PullTask pull(const void* source, size_t N);
     
   private:
     
@@ -248,16 +262,17 @@ class PullTask : public TaskBase {
 inline PullTask::PullTask(Node* node) : 
   TaskBase::TaskBase {node} {
 }
-    
+
 // Procedure: pull
-template <typename T>
-void PullTask::pull(const T* source, size_t N) {
+inline PullTask PullTask::pull(const void* source, size_t N) {
 
   HF_THROW_IF(!_node, "pull task is empty");
 
   auto& handle = nonstd::get<node_handle_t>(_node->_handle);
   handle.h_data = source;
-  handle.h_size = N * sizeof(T);
+  handle.h_size = N;
+
+  return *this;
 }
 
 // Function: d_data
@@ -272,7 +287,12 @@ inline void* PullTask::_d_data() {
 
 @brief the handle to a push task
 */
-class PushTask : public TaskBase {
+class PushTask : public TaskBase<PushTask> {
+  
+  friend class TaskBase<HostTask>;
+  friend class TaskBase<PullTask>;
+  friend class TaskBase<PushTask>;
+  friend class TaskBase<KernelTask>;
 
   friend class FlowBuilder;
   
@@ -288,18 +308,12 @@ class PushTask : public TaskBase {
     /**
     @brief alters the host memory block to push from gpu
     
-    @tparam T data type of the host memory block
-
     @param target the pointer to the beginning of the host memory block
     @param source the source pull task that stores the gpu memory block
-    @param N number of items of type T to push
-
-    The number of bytes to copy to the host is sizeof(T)*N. 
-    It is users' responsibility to ensure the data type and the size are correct.
+    @param N number of bytes to push
     */
-    template <typename T>
-    void push(T* target, PullTask source, size_t N);
-
+    PushTask push(void* target, PullTask source, size_t N);
+    
   private:
 
     PushTask(Node* node);
@@ -309,8 +323,7 @@ inline PushTask::PushTask(Node* node) :
   TaskBase::TaskBase {node} {
 }
 
-template <typename T>
-void PushTask::push(T* target, PullTask source, size_t N) {
+inline PushTask PushTask::push(void* target, PullTask source, size_t N) {
 
   HF_THROW_IF(
     !_node || !source, "both push and pull tasks should be non-empty"
@@ -319,7 +332,9 @@ void PushTask::push(T* target, PullTask source, size_t N) {
   auto& handle = nonstd::get<node_handle_t>(_node->_handle);
   handle.h_data = target,
   handle.source = source._node;
-  handle.h_size = N * sizeof(T);
+  handle.h_size = N;
+
+  return *this;
 }
 
 // ----------------------------------------------------------------------------
@@ -329,7 +344,12 @@ void PushTask::push(T* target, PullTask source, size_t N) {
 
 @brief the handle to a kernel (gpu) task
 */
-class KernelTask : public TaskBase {
+class KernelTask : public TaskBase<KernelTask> {
+  
+  friend class TaskBase<HostTask>;
+  friend class TaskBase<PullTask>;
+  friend class TaskBase<PushTask>;
+  friend class TaskBase<KernelTask>;
 
   friend class FlowBuilder;
   
@@ -344,23 +364,31 @@ class KernelTask : public TaskBase {
 
     /**
     @brief alters the x dimension of the grid
+    
+    @return task handle
     */
-    void grid_x(size_t x);
+    KernelTask grid_x(size_t x);
     
     /**
     @brief alters the y dimension of the grid
+    
+    @return task handle
     */
-    void grid_y(size_t y);
+    KernelTask grid_y(size_t y);
     
     /**
     @brief alters the z dimension of the grid
+    
+    @return task handle
     */
-    void grid_z(size_t z);
+    KernelTask grid_z(size_t z);
     
     /**
     @brief alters the grid dimension in the form of {x, y, z}
+    
+    @return task handle
     */
-    void grid(const ::dim3& grid);
+    KernelTask grid(const ::dim3& grid);
 
     /**
     @brief queries the x dimension of the grid
@@ -384,23 +412,38 @@ class KernelTask : public TaskBase {
     
     /**
     @brief alters the x dimension of the block
+    
+    @return task handle
     */
-    void block_x(size_t x);
+    KernelTask block_x(size_t x);
     
     /**
     @brief alters the y dimension of the block
+    
+    @return task handle
     */
-    void block_y(size_t y);
+    KernelTask block_y(size_t y);
     
     /**
     @brief alters the z dimension of the block
+    
+    @return task handle
     */
-    void block_z(size_t z);
+    KernelTask block_z(size_t z);
     
     /**
     @brief alters the block dimension in the form of {x, y, z}
+    
+    @return task handle
     */
-    void block(const ::dim3& block);
+    KernelTask block(const ::dim3& block);
+    
+    /**
+    @brief alters the shared memory size 
+
+    @return task handle
+    */
+    KernelTask shm(size_t);
 
     /**
     @brief queries the x dimension of the block
@@ -421,39 +464,106 @@ class KernelTask : public TaskBase {
     @brief query the block dimension
     */
     const ::dim3& block() const;
+    
+    /**
+    @brief query the shared memory size
+    */
+    size_t shm() const;
+    
+    /**
+    @brief assign a kernel 
 
+    @tparam ArgsT... argument types
+
+    @param func kernel function
+    @param args... arguments to forward to the kernel function
+
+    @return KernelTask handle
+
+    The function performs default configuration to launch the kernel.
+    */
+    template <typename F, typename... ArgsT>
+    KernelTask kernel(F&& func, ArgsT&&... args);
 
   private:
 
     KernelTask(Node* node);
+
+    template <typename T>
+    auto _to_argument(T&& t);
+    
+    PointerCaster _to_argument(PullTask);
+
+    template <typename T>
+    void _gather_sources(T&&);
+
+    void _gather_sources(PullTask);
+    
+    template <typename T, typename... Ts>
+    void _gather_sources(T&&, Ts&&...);
 };
 
+// Constructor
 inline KernelTask::KernelTask(Node* node) : 
   TaskBase::TaskBase {node} {
 }
 
+// Function: _to_argument
+template <typename T>
+auto KernelTask::_to_argument(T&& t) { 
+  return std::forward<T>(t); 
+}
+
+// Function: _to_argument
+inline PointerCaster KernelTask::_to_argument(PullTask task) { 
+  HF_THROW_IF(!task, "pull task is empty");
+  return PointerCaster{task._d_data()}; 
+}
+    
+// Procedure: _gather_sources
+template <typename T>
+void KernelTask::_gather_sources(T&& other) {
+}
+
+// Procedure: _gather_sources
+void KernelTask::_gather_sources(PullTask task) {
+  HF_THROW_IF(!_node, "kernel task cannot operate on empty pull tasks");
+  _node->_kernel_handle().sources.push_back(task._node);
+}
+    
+// Procedure: _gather_sources
+template <typename T, typename... Ts>
+void KernelTask::_gather_sources(T&& task, Ts&&... others) {
+  _gather_sources(std::forward<T>(task));
+  _gather_sources(std::forward<Ts>(others)...);
+}
+
 // Procedure: grid_x
-inline void KernelTask::grid_x(size_t x) {
+inline KernelTask KernelTask::grid_x(size_t x) {
   HF_THROW_IF(!_node, "kernel task is empty");
   nonstd::get<node_handle_t>(_node->_handle).grid.x = x;
+  return *this;
 }
 
 // Procedure: grid_y
-inline void KernelTask::grid_y(size_t y) {
+inline KernelTask KernelTask::grid_y(size_t y) {
   HF_THROW_IF(!_node, "kernel task is empty");
   nonstd::get<node_handle_t>(_node->_handle).grid.y = y;
+  return *this;
 }
 
 // Procedure: grid_z
-inline void KernelTask::grid_z(size_t z) {
+inline KernelTask KernelTask::grid_z(size_t z) {
   HF_THROW_IF(!_node, "kernel task is empty");
   nonstd::get<node_handle_t>(_node->_handle).grid.z = z;
+  return *this;
 }
 
 // Procedure: grid
-inline void KernelTask::grid(const ::dim3& grid) {
+inline KernelTask KernelTask::grid(const ::dim3& grid) {
   HF_THROW_IF(!_node, "kernel task is empty");
   nonstd::get<node_handle_t>(_node->_handle).grid = grid;
+  return *this;
 }
 
 // Function: grid_x
@@ -481,27 +591,31 @@ inline const ::dim3& KernelTask::grid() const {
 }
 
 // Procedure: block_x
-inline void KernelTask::block_x(size_t x) {
+inline KernelTask KernelTask::block_x(size_t x) {
   HF_THROW_IF(!_node, "kernel task is empty");
   nonstd::get<node_handle_t>(_node->_handle).block.x = x;
+  return *this;
 }
 
 // Procedure: block_y
-inline void KernelTask::block_y(size_t y) {
+inline KernelTask KernelTask::block_y(size_t y) {
   HF_THROW_IF(!_node, "kernel task is empty");
   nonstd::get<node_handle_t>(_node->_handle).block.y = y;
+  return *this;
 }
 
 // Procedure: block_z
-inline void KernelTask::block_z(size_t z) {
+inline KernelTask KernelTask::block_z(size_t z) {
   HF_THROW_IF(!_node, "kernel task is empty");
   nonstd::get<node_handle_t>(_node->_handle).block.z = z;
+  return *this;
 }
 
 // Procedure: block
-inline void KernelTask::block(const ::dim3& block) {
+inline KernelTask KernelTask::block(const ::dim3& block) {
   HF_THROW_IF(!_node, "kernel task is empty");
   nonstd::get<node_handle_t>(_node->_handle).block = block;
+  return *this;
 }
 
 // Function: block_x
@@ -528,17 +642,48 @@ inline const ::dim3& KernelTask::block() const {
   return nonstd::get<node_handle_t>(_node->_handle).block;
 }
 
+// Procedure: shm
+inline KernelTask KernelTask::shm(size_t sz) {
+  _node->_kernel_handle().shm = sz;
+  return *this;
+}
+
+// Function: shm
+inline size_t KernelTask::shm() const {
+  HF_THROW_IF(!_node, "kernel task is empty");
+  return _node->_kernel_handle().shm;
+}
+
+template <typename F, typename... ArgsT>
+KernelTask KernelTask::kernel(F&& func, ArgsT&&... args) {
+  
+  // all pull tasks need to precede this kernel
+  _gather_sources(args...);
+
+  // assign the work
+  _node->_work = [this, func, args...] () {
+    auto& h = _node->_kernel_handle();
+    func<<<h.grid, h.block, h.shm, h.stream>>>(
+      _to_argument(args)...
+    );
+  };
+
+  return *this;
+}
+
 // ----------------------------------------------------------------------------
 
-template <typename T>
-auto to_kernel_argument(T&& t) -> decltype(std::forward<T>(t)) { 
-  return std::forward<T>(t); 
-}
+//template <typename T>
+//auto to_kernel_argument(T&& t) -> decltype(std::forward<T>(t)) { 
+//  return std::forward<T>(t); 
+//}
+//
+//inline PointerCaster to_kernel_argument(PullTask task) { 
+//  HF_THROW_IF(!task, "pull task is empty");
+//  return PointerCaster{task._d_data()}; 
+//}
 
-inline PointerCaster to_kernel_argument(PullTask task) { 
-  HF_THROW_IF(!task, "pull task is empty");
-  return PointerCaster{task._d_data()}; 
-}
+
 
 }  // end of namespace hf -----------------------------------------------------
 

@@ -26,6 +26,9 @@ using enable_if_t = typename std::enable_if<B,T>::type;
 template< class T >
 using decay_t = typename std::decay<T>::type;
 
+template< class T >
+inline constexpr bool is_pointer_v = std::is_pointer<T>::value;
+
 };  // end of nonstd ----------------------------------------------------------
 
 namespace hf {

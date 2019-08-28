@@ -6,12 +6,15 @@ namespace hf {
 
 // Class: Node
 class Node {
-
+    
+  template <typename Drvied>
   friend class TaskBase;
+
   friend class HostTask;
   friend class PullTask;
   friend class PushTask;
   friend class KernelTask;
+
   friend class FlowBuilder;
   
   // Host data
@@ -22,9 +25,7 @@ class Node {
   struct Pull {
 
     Pull() = default;
-
-    template <typename T>
-    Pull(const T*, size_t);
+    Pull(const void*, size_t);
 
     ~Pull();
 
@@ -40,11 +41,8 @@ class Node {
   struct Push {
 
     Push() = default;
-
-    template <typename T>
-    Push(T*, Node*, size_t);
+    Push(void*, Node*, size_t);
     
-    int          device {0};
     cudaStream_t stream {0};
     void*        h_data {nullptr};
     Node*        source {nullptr};
@@ -61,6 +59,8 @@ class Node {
     ::dim3       grid   {1, 1, 1};
     ::dim3       block  {1, 1, 1}; 
     size_t       shm    {0};
+
+    std::vector<Node*> sources;
   };
 
   public:
@@ -72,6 +72,10 @@ class Node {
     bool is_push() const;
     bool is_pull() const;
     bool is_kernel() const;
+
+    void dump(std::ostream&) const;
+
+    std::string dump() const;
 
   private:
     
@@ -103,10 +107,9 @@ class Node {
 // ----------------------------------------------------------------------------
 
 // Constructor
-template <typename T>
-Node::Pull::Pull(const T* data, size_t N) : 
+inline Node::Pull::Pull(const void* data, size_t N) : 
   h_data {data},
-  h_size {N * sizeof(T)} {
+  h_size {N} {
 }
 
 // Destructor
@@ -122,17 +125,18 @@ inline Node::Pull::~Pull() {
 // ----------------------------------------------------------------------------
 
 // Constructor
-template <typename T>
-Node::Push::Push(T* tgt, Node* src, size_t N) : 
+inline Node::Push::Push(void* tgt, Node* src, size_t N) : 
   h_data {tgt},
   source {src},
-  h_size {N * sizeof(T)} {
+  h_size {N} {
 }
     
 // ----------------------------------------------------------------------------
 // Kernel field
 // ----------------------------------------------------------------------------
 
+// ----------------------------------------------------------------------------
+// Node field
 // ----------------------------------------------------------------------------
 
 // Constructor
@@ -168,7 +172,52 @@ inline Node::Kernel& Node::_kernel_handle() {
   return nonstd::get<Kernel>(_handle);
 }
 
-// ----------------------------------------------------------------------------
+// Function: dump
+inline std::string Node::dump() const {
+  std::ostringstream os;  
+  dump(os);
+  return os.str();
+}
+
+// Function: dump
+inline void Node::dump(std::ostream& os) const {
+
+  os << 'p' << this << "[label=\"";
+  if(_name.empty()) {
+    os << 'p' << this << "\"";
+  }
+  else {
+    os << _name << "\"";
+  }
+
+  // color
+  switch(_handle.index()) {
+    // pull
+    case 1:
+      os << " style=filled fillcolor=\"cyan\"";
+    break;
+    
+    // push
+    case 2:
+      os << " style=filled fillcolor=\"springgreen\"";
+    break;
+    
+    // kernel
+    case 3:
+      os << " style=filled fillcolor=\"black\" fontcolor=\"white\" shape=\"diamond\"";
+    break;
+
+    default:
+    break;
+  };
+
+  os << "];\n";
+  
+  for(const auto s : _successors) {
+    os << 'p' << this << " -> " << 'p' << s << ";\n";
+  }
+}
+
 
 
 }  // end of namespace hf -----------------------------------------------------

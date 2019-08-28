@@ -12,6 +12,8 @@ namespace hf {
 */
 class FlowBuilder {
 
+  friend class Heteroflow;
+
   public:
 
     /**
@@ -39,35 +41,23 @@ class FlowBuilder {
     /**
     @brief creates a pull task that copies a given host memory block to gpu
 
-    @tparam T data type of the host memory block
-    
     @param source the pointer to the beginning of the host memory block
-    @param N number of items of type T to pull
+    @param N number of bytes to pull
 
     @return PullTask handle
-
-    The number of bytes copied to gpu is sizeof(T)*N.
-    It is users' responsibility to ensure the data type and the size are correct.
     */
-    template <typename T>
-    PullTask pull(const T* source, size_t N);
+    PullTask pull(const void* source, size_t N);
     
     /**
     @brief creates a push task that copies a given gpu memory block to the host
     
-    @tparam T data type of the host memory block
-
     @param target the pointer to the beginning of the host memory block
     @param source the source pull task that stores the gpu memory block
-    @param N number of items of type T to push
+    @param N number of bytes to push
 
     @return PushTask handle
-    
-    The number of bytes copied to the host is sizeof(T)*N. 
-    It is users' responsibility to ensure the data type and the size are correct.
     */
-    template <typename T>
-    PushTask push(T* target, PullTask source, size_t N);
+    PushTask push(void* target, PullTask source, size_t N);
     
     /**
     @brief creates a kernel task that launches a given kernel 
@@ -112,23 +102,20 @@ HostTask FlowBuilder::host(C&& callable) {
   ));
   
   // assign the work
-  _nodes.back()->_work = std::forward<C>(callable);
-
-  return HostTask(_nodes.back().get());
+  return HostTask(_nodes.back().get())
+        .work(std::forward<C>(callable));
 }
 
 // Function: pull
-template <typename T>
-PullTask FlowBuilder::pull(const T* source, size_t N) {
+inline PullTask FlowBuilder::pull(const void* source, size_t N) {
   _nodes.emplace_back(std::make_unique<Node>(
     nonstd::in_place_type_t<Node::Pull>{}, source, N
   ));
   return PullTask(_nodes.back().get());
 }
-    
+
 // Function: push
-template <typename T>
-PushTask FlowBuilder::push(T* target, PullTask source, size_t N) {
+inline PushTask FlowBuilder::push(void* target, PullTask source, size_t N) {
 
   HF_THROW_IF(!source, "source pull task is empty");
 
@@ -145,26 +132,15 @@ KernelTask FlowBuilder::kernel(F&& func, ArgsT&&... args) {
   
   static_assert(
     function_traits<F>::arity == sizeof...(args), 
-    "arguments arity mismatch"
+    "argument arity mismatches"
   );
 
   _nodes.emplace_back(std::make_unique<Node>(
     nonstd::in_place_type_t<Node::Kernel>{}
   ));
 
-  auto& node = _nodes.back();
-  
-  // assign the work
-  node->_work = [node=node.get(), func, args...] () {
-    auto& h = node->_kernel_handle();
-    func<<<h.grid, h.block, h.shm, h.stream>>>(
-      to_kernel_argument(args)...
-    );
-  };
-
-  node->_work();
-  
-  return KernelTask(node.get());
+  return KernelTask(_nodes.back().get())
+        .kernel(std::forward<F>(func), std::forward<ArgsT>(args)...);
 }
 
 // Procedure: clear
