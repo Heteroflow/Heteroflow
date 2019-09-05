@@ -27,11 +27,13 @@ if(HF_GET_FIRST(__VA_ARGS__) != cudaSuccess) {        \
       << (error_str  ? error_str  : unknown_str)      \
       << " ("                                         \
       << (error_name ? error_name : unknown_name)     \
-      << ")";                                         \
-  if(hf::va_count(__VA_ARGS__) > 1) {                 \
-    oss << " - ";                                     \
-    hf::stringify(oss, HF_REMOVE_FIRST(__VA_ARGS__)); \
-  }                                                   \
-  throw std::runtime_error(oss.str());                \
+      << ") - ";                                      \
+  hf::stringify(oss, HF_REMOVE_FIRST(__VA_ARGS__));   \
+  oss << '\n';                                        \
+  std::cerr << oss.str();                             \
+  std::abort();                                       \
 }
+
+
+
 

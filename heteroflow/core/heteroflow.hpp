@@ -64,7 +64,10 @@ class Heteroflow : public FlowBuilder {
   private:
 
     std::string _name;
+    
+    std::mutex _mtx;
 
+    std::list<Topology> _topologies;
 };
 
 // Constructor
@@ -74,6 +77,7 @@ Heteroflow::Heteroflow(S&& name) : _name {std::forward<S>(name)} {
 
 // Destructor
 inline Heteroflow::~Heteroflow() {
+  assert(_topologies.empty());
 }
 
 // Procedure: name
@@ -109,7 +113,7 @@ inline void Heteroflow::dump(std::ostream& os) const {
   os << " {\nrankdir=\"TB\";\n";
   
   // dump the details of this taskflow
-  for(const auto& n : _nodes) {
+  for(const auto& n : _graph) {
     // regular task
     n->dump(os);
   }

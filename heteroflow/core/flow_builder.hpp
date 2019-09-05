@@ -4,6 +4,8 @@
 
 namespace hf {
 
+using Graph = std::vector<std::unique_ptr<Node>>;
+
 /** 
 @class FlowBuilder
 
@@ -13,13 +15,14 @@ namespace hf {
 class FlowBuilder {
 
   friend class Heteroflow;
+  friend class Executor;
 
   public:
 
     /**
     @brief creates a placeholder task
 
-    @tparam T task type (PullTask, PushTask, etc.)
+    @tparam T task type (PullTask, PushTask, KernelTask, and HostTask)
 
     @return task handle of type T
     */
@@ -78,40 +81,51 @@ class FlowBuilder {
     @brief clears the graph
     */
     void clear();
+    
+    /**
+    @brief queries the number of nodes
+    */
+    size_t num_nodes() const;
 
   private:
 
-    std::vector<std::unique_ptr<Node>> _nodes;
+    Graph _graph;
 };
 
 // Function: placeholder
 template <typename T>
 T FlowBuilder::placeholder() {
-  _nodes.emplace_back(std::make_unique<Node>(
+  _graph.emplace_back(std::make_unique<Node>(
     nonstd::in_place_type_t<typename T::node_handle_t>{}
   ));
-  return T(_nodes.back().get());
+  return T(_graph.back().get());
 }
 
 // Function: host
 template <typename C>
 HostTask FlowBuilder::host(C&& callable) {
 
-  _nodes.emplace_back(std::make_unique<Node>(
+  _graph.emplace_back(std::make_unique<Node>(
     nonstd::in_place_type_t<Node::Host>{}
   ));
   
   // assign the work
-  return HostTask(_nodes.back().get())
+  return HostTask(_graph.back().get())
         .work(std::forward<C>(callable));
 }
 
 // Function: pull
 inline PullTask FlowBuilder::pull(const void* source, size_t N) {
-  _nodes.emplace_back(std::make_unique<Node>(
+  
+  _graph.emplace_back(std::make_unique<Node>(
     nonstd::in_place_type_t<Node::Pull>{}, source, N
   ));
-  return PullTask(_nodes.back().get());
+
+  PullTask task(_graph.back().get());
+
+  task._make_work();
+
+  return task;
 }
 
 // Function: push
@@ -119,11 +133,15 @@ inline PushTask FlowBuilder::push(void* target, PullTask source, size_t N) {
 
   HF_THROW_IF(!source, "source pull task is empty");
 
-  _nodes.emplace_back(std::make_unique<Node>(
+  _graph.emplace_back(std::make_unique<Node>(
     nonstd::in_place_type_t<Node::Push>{}, target, source._node, N
   ));
 
-  return PushTask(_nodes.back().get());
+  PushTask task(_graph.back().get());
+
+  task._make_work();
+
+  return task;
 }
 
 // Function: kernel    
@@ -135,19 +153,26 @@ KernelTask FlowBuilder::kernel(F&& func, ArgsT&&... args) {
     "argument arity mismatches"
   );
 
-  _nodes.emplace_back(std::make_unique<Node>(
+  _graph.emplace_back(std::make_unique<Node>(
     nonstd::in_place_type_t<Node::Kernel>{}
   ));
 
-  return KernelTask(_nodes.back().get())
-        .kernel(std::forward<F>(func), std::forward<ArgsT>(args)...);
+  KernelTask task(_graph.back().get());
+
+  task.kernel(std::forward<F>(func), std::forward<ArgsT>(args)...);
+
+  return task;
 }
 
 // Procedure: clear
 inline void FlowBuilder::clear() {
-  _nodes.clear();
+  _graph.clear();
 }
 
+// Function: num_nodes
+inline size_t FlowBuilder::num_nodes() const {
+  return _graph.size();
+}
 
 }  // end of namespace hf -----------------------------------------------------
 
