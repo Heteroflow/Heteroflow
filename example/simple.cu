@@ -9,10 +9,10 @@ __global__ void simple(float* X, size_t Nx, float* Y, size_t Ny) {
   );
 }
 
-__global__ void hello_kernel() {
+__global__ void hello_kernel(int id) {
   printf(
-    "Hello from block %d, thread %d\n", 
-    blockIdx.x, threadIdx.x
+    "Hello from block %d, thread %d (my-id=%d)\n", 
+    blockIdx.x, threadIdx.x, id
   );
 }
 
@@ -61,7 +61,14 @@ int main() {
   //B.precede(D);
   //C.precede(D);
 
-  hf.kernel(hello_kernel).name("kernel");
+  auto k1 = hf.kernel(hello_kernel, 1).name("kernel1");
+  auto k2 = hf.kernel(hello_kernel, 2).name("kernel2");
+  auto k3 = hf.kernel(hello_kernel, 3).name("kernel3");
+  auto k4 = hf.kernel(hello_kernel, 4).name("kernel4");
+
+  k1.precede(k2);
+  k2.precede(k3);
+  k3.precede(k4);
   
   // create an executor
   hf::Executor executor(4, 1);

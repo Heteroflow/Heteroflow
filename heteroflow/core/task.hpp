@@ -28,6 +28,16 @@ template <typename Derived>
 class TaskBase {
 
   public:
+    
+    /**
+    @brief copy constructor
+    */
+    TaskBase(const TaskBase&) = default;
+
+    /**
+    @brief copy assignment
+    */
+    TaskBase& operator = (const TaskBase&) = default;
 
     /**
     @brief queries the name of the task
@@ -186,6 +196,16 @@ class HostTask : public TaskBase<HostTask> {
     @brief constructs an empty host task handle
     */
     HostTask() = default;
+    
+    /**
+    @brief copy constructor
+    */
+    HostTask(const HostTask&) = default;
+
+    /**
+    @brief copy assignment
+    */
+    HostTask& operator = (const HostTask&) = default;
 
     /**
     @brief assigns a work to the host task
@@ -196,11 +216,6 @@ class HostTask : public TaskBase<HostTask> {
     */
     template <typename C>
     HostTask work(C&& callable);
-    
-    /**
-    @brief copy assignment
-    */
-    HostTask& operator = (const HostTask&) = default;  
     
   private:
 
@@ -247,6 +262,16 @@ class PullTask : public TaskBase<PullTask> {
     @brief constructs an empty pull task handle
     */
     PullTask() = default;
+    
+    /**
+    @brief copy constructor
+    */
+    PullTask(const PullTask&) = default;
+
+    /**
+    @brief copy assignment
+    */
+    PullTask& operator = (const PullTask&) = default;
 
     /**
     @brief alters the host memory block to copy to GPU
@@ -296,9 +321,9 @@ inline void* PullTask::_d_data() {
 // Procedure: _make_work
 inline void PullTask::_make_work() {  
 
-  _node->_work = [this] () {
+  _node->_work = [this, v=_node] () {
 
-    auto& h = _node->_pull_handle();
+    auto& h = v->_pull_handle();
 
     HF_WITH_CUDA_DEVICE(h.device) {
 
@@ -364,6 +389,16 @@ class PushTask : public TaskBase<PushTask> {
     PushTask() = default;
     
     /**
+    @brief copy constructor
+    */
+    PushTask(const PushTask&) = default;
+
+    /**
+    @brief copy assignment
+    */
+    PushTask& operator = (const PushTask&) = default;
+    
+    /**
     @brief alters the host memory block to push from gpu
     
     @param target the pointer to the beginning of the host memory block
@@ -402,9 +437,9 @@ inline PushTask PushTask::push(void* target, PullTask source, size_t N) {
 // Procedure: _make_work
 inline void PushTask::_make_work() {
 
-  _node->_work = [this] () {
+  _node->_work = [this, v=_node] () {
 
-    auto& h = _node->_push_handle();
+    auto& h = v->_push_handle();
     
     if(h.h_data == nullptr || h.h_size == 0) {
       return;
@@ -453,6 +488,16 @@ class KernelTask : public TaskBase<KernelTask> {
     @brief constructs an empty kernel task handle
     */
     KernelTask() = default;
+    
+    /**
+    @brief copy constructor
+    */
+    KernelTask(const KernelTask&) = default;
+
+    /**
+    @brief copy assignment
+    */
+    KernelTask& operator = (const KernelTask&) = default;
 
     /**
     @brief alters the x dimension of the grid
@@ -764,16 +809,13 @@ KernelTask KernelTask::kernel(F&& func, ArgsT&&... args) {
   _gather_sources(args...);
 
   // assign the work
-  _node->_work = [this, func, args...] () {
-    std::cout << "executing kernel " << _node->_handle.index() 
-              << ' ' << _node->_name << std::endl;
-    auto& h = _node->_kernel_handle();
+  _node->_work = [this, v=_node, func, args...] () {
+    auto& h = v->_kernel_handle();
     HF_WITH_CUDA_DEVICE(h.device) {
       func<<<h.grid, h.block, h.shm, h.stream>>>(
         _to_argument(args)...
       );
     }
-    std::cout << "end executing kernel\n";
   };
 
   return *this;
