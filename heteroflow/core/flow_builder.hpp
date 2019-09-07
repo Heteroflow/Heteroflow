@@ -157,11 +157,8 @@ KernelTask FlowBuilder::kernel(F&& func, ArgsT&&... args) {
     nonstd::in_place_type_t<Node::Kernel>{}
   ));
 
-  KernelTask task(_graph.back().get());
-
-  task.kernel(std::forward<F>(func), std::forward<ArgsT>(args)...);
-
-  return task;
+  return KernelTask(_graph.back().get())
+        .kernel(std::forward<F>(func), std::forward<ArgsT>(args)...);
 }
 
 // Procedure: clear

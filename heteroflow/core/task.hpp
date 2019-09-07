@@ -325,15 +325,14 @@ inline void PullTask::_make_work() {
 
     auto& h = v->_pull_handle();
 
+    std::cout << "running task " << v->_name << std::endl;
+
     HF_WITH_CUDA_DEVICE(h.device) {
 
       // allocate the global memory
       if(h.d_data == nullptr) {
         assert(h.d_size == 0);
         h.d_size = h.h_size;
-        HF_CHECK_CUDA(::cudaMalloc(&(h.d_data), h.d_size),
-          "failed to allocate global memory in task ", name()
-        );
       }
       // reallocate the global memory
       else if(h.d_size < h.h_size) {
@@ -342,13 +341,14 @@ inline void PullTask::_make_work() {
         HF_CHECK_CUDA(::cudaFree(h.d_data),
           "failed to free global memory in task ", name()
         )
-        HF_CHECK_CUDA(::cudaMalloc(&(h.d_data), h.d_size),
-          "failed to re-allocate global memory in task ", name()
-        );
       }
+
+      HF_CHECK_CUDA(::cudaMalloc(&(h.d_data), h.d_size),
+        "failed to allocate global memory in task ", name()
+      );
       
       // nothing to do if the host is null
-      if(h.d_data == nullptr) {
+      if(h.h_data == nullptr) {
         return;
       }
 
@@ -630,14 +630,13 @@ class KernelTask : public TaskBase<KernelTask> {
     auto _to_argument(T&& t);
     
     PointerCaster _to_argument(PullTask);
-
+    
     void _gather_sources(void);
-
+    void _gather_sources(PullTask);
+    
     template <typename T>
     void _gather_sources(T&&);
 
-    void _gather_sources(PullTask);
-    
     template <typename T, typename... Ts>
     void _gather_sources(T&&, Ts&&...);
 };

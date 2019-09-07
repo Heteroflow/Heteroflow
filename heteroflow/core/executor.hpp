@@ -439,30 +439,34 @@ inline void Executor::_invoke(unsigned me, Node* node) {
     
     auto root = node->_root();
     auto& dev = root->_device();
+    
+    // Find a device for this node
+    int t = dev;
 
-    if(dev == -1) {
+    if(t == -1) {
 
       int s = -1;
       int l = 0;
       int r = _devices.size();
-      int t = std::uniform_int_distribution<int>{l, r-1}(_workers[me].rdgen);
+
+      t = std::uniform_int_distribution<int>{l, r-1}(_workers[me].rdgen);
 
       if(!dev.compare_exchange_strong(s, t)) {
         t = s;
       }
-      
-      // kernel task
-      if(node->is_kernel()) {
-        node->_kernel_handle().device = t;
-      }
-
-      // pull task
-      if(node->is_pull()) {
-        node->_pull_handle().device = t;
-      }
-      
-      printf("task %s is mapped to device %d\n", node->_name.c_str(), dev.load());
     }
+
+    // kernel task
+    if(node->is_kernel()) {
+      node->_kernel_handle().device = t;
+    }
+
+    // pull task
+    if(node->is_pull()) {
+      node->_pull_handle().device = t;
+    }
+    
+    printf("task %s is mapped to device %d\n", node->_name.c_str(), t);
   }
   
   // Invoke the work at the node 
