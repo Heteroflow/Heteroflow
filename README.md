@@ -1,5 +1,7 @@
-# Heteroflow
-Parallel CPU-GPU Programming using Task-based Models
+# Heteroflow <img align="right" width="10%" src="images/heteroflow-logo.png">
+
+
+Parallel CPU-GPU Task Programming in Modern C++
 
 :exclamation: Notice this is a working repository. A lot of things are under construction.
 One can visit our predecessor project 
