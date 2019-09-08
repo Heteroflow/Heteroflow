@@ -33,6 +33,10 @@ inline constexpr bool is_pointer_v = std::is_pointer<T>::value;
 
 namespace hf {
 
+// ----------------------------------------------------------------------------
+// Function Traits
+// ----------------------------------------------------------------------------
+
 template<typename F>
 struct function_traits;
  
@@ -64,6 +68,64 @@ struct function_traits<R(Args...)> {
   template <size_t N>
   using argument_t = typename argument<N>::type;
 };
+
+// ----------------------------------------------------------------------------
+// Stateful Tuple
+// ----------------------------------------------------------------------------
+
+// forward declaration
+class PushTask;
+class PullTask;
+class HostTask;
+class KernelTask;
+
+template <typename T>
+struct stateful_decay {
+  using type = T;
+};
+
+template <typename T>
+struct stateful_decay<T&&> {
+  using type = T;
+};
+
+template <>
+struct stateful_decay<PullTask&&> {
+  using type = PullTask;
+};
+
+template <>
+struct stateful_decay<PullTask&> {
+  using type = PullTask;
+};
+
+template <>
+struct stateful_decay<PullTask> {
+  using type = PullTask;
+};
+
+template <>
+struct stateful_decay<const PullTask&&> {
+  using type = PullTask;
+};
+
+template <>
+struct stateful_decay<const PullTask&> {
+  using type = PullTask;
+};
+
+template <>
+struct stateful_decay<const PullTask> {
+  using type = PullTask;
+};
+
+template <typename T>
+using stateful_decay_t = typename stateful_decay<T>::type;
+
+template <class... Types>
+auto make_stateful_tuple(Types&&... args) {
+  return std::tuple<stateful_decay_t<Types>...>(std::forward<Types>(args)...);
+}
 
 
 }  // end of namespace hf -----------------------------------------------------
