@@ -44,23 +44,25 @@ class FlowBuilder {
     /**
     @brief creates a pull task that copies a given host memory block to gpu
 
-    @param source the pointer to the beginning of the host memory block
-    @param N number of bytes to pull
+    @tparam ArgsT argements types
+    @param args arguments to forward to construct a span object
 
     @return PullTask handle
     */
-    PullTask pull(const void* source, size_t N);
+    template <typename... ArgsT>
+    PullTask pull(ArgsT&&... args);
     
     /**
     @brief creates a push task that copies a given gpu memory block to the host
     
-    @param target the pointer to the beginning of the host memory block
-    @param source the source pull task that stores the gpu memory block
-    @param N number of bytes to push
+    @tparam ArgsT argements types
+    @param source a source pull task of a gpu memory block
+    @param args arguments to forward to construct a span object
 
     @return PushTask handle
     */
-    PushTask push(void* target, PullTask source, size_t N);
+    template <typename... ArgsT>
+    PushTask push(PullTask source, ArgsT&&... args);
     
     /**
     @brief creates a kernel task that launches a given kernel 
@@ -115,33 +117,29 @@ HostTask FlowBuilder::host(C&& callable) {
 }
 
 // Function: pull
-inline PullTask FlowBuilder::pull(const void* source, size_t N) {
+template <typename... C>
+PullTask FlowBuilder::pull(C&&... c) {
   
   _graph.emplace_back(std::make_unique<Node>(
-    nonstd::in_place_type_t<Node::Pull>{}, source, N
+    nonstd::in_place_type_t<Node::Pull>{}
   ));
 
-  PullTask task(_graph.back().get());
-
-  task._make_work();
-
-  return task;
+  return PullTask(_graph.back().get())
+        .pull(std::forward<C>(c)...);
 }
 
 // Function: push
-inline PushTask FlowBuilder::push(void* target, PullTask source, size_t N) {
+template <typename... ArgsT>
+PushTask FlowBuilder::push(PullTask source, ArgsT&&... args) {
 
   HF_THROW_IF(!source, "source pull task is empty");
 
   _graph.emplace_back(std::make_unique<Node>(
-    nonstd::in_place_type_t<Node::Push>{}, target, source._node, N
+    nonstd::in_place_type_t<Node::Push>{}
   ));
 
-  PushTask task(_graph.back().get());
-
-  task._make_work();
-
-  return task;
+  return PushTask(_graph.back().get())
+        .push(source, std::forward<ArgsT>(args)...);
 }
 
 // Function: kernel    

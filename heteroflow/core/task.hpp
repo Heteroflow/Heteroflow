@@ -12,6 +12,41 @@ class KernelTask;
 
 // ----------------------------------------------------------------------------
 
+template <typename T>
+struct stateful_decay {
+  using type = T;
+};
+
+template <typename T>
+struct stateful_decay<T&&> {
+  using type = T;
+};
+
+template <>
+struct stateful_decay<PullTask&&> {
+  using type = PullTask;
+};
+
+template <>
+struct stateful_decay<PullTask&> {
+  using type = PullTask;
+};
+
+template <>
+struct stateful_decay<PullTask> {
+  using type = PullTask;
+};
+
+template <typename T>
+using stateful_decay_t = typename stateful_decay<T>::type;
+
+template <class... Types>
+auto make_stateful_tuple(Types&&... args) {
+  return std::tuple<stateful_decay_t<Types>...>(std::forward<Types>(args)...);
+}
+    
+// ----------------------------------------------------------------------------
+
 /**
 @class TaskBase
 
@@ -276,13 +311,11 @@ class PullTask : public TaskBase<PullTask> {
     /**
     @brief alters the host memory block to copy to GPU
 
-    @param source the pointer to the beginning of the host memory block
-    @param N number of bytes to pull
-
-    When source is a null pointer, the pull task performs only global
-    memory allocation on the device. 
+    @tparam ArgsT argements types
+    @param args arguments to forward to construct a span object
     */
-    PullTask pull(const void* source, size_t N);
+    template <typename... ArgsT>
+    PullTask pull(ArgsT&&... args);
     
   private:
     
@@ -298,46 +331,38 @@ inline PullTask::PullTask(Node* node) :
   TaskBase::TaskBase {node} {
 }
 
-// Procedure: pull
-inline PullTask PullTask::pull(const void* source, size_t N) {
-
-  HF_THROW_IF(!_node, "pull task is empty");
-
-  auto& handle = _node->_pull_handle();
-  handle.h_data = source;
-  handle.h_size = N;
-
-  // assign the work
-  _make_work();
-
-  return *this;
-}
-
 // Function: d_data
 inline void* PullTask::_d_data() {
   return nonstd::get<node_handle_t>(_node->_handle).d_data;
 }
-  
-// Procedure: _make_work
-inline void PullTask::_make_work() {  
 
-  _node->_work = [this, v=_node] () {
-
+// Function: pull
+template <typename... ArgsT>
+PullTask PullTask::pull(ArgsT&&... args) {
+   
+  _node->_work = [&, v=_node] () {
+    
+    // obtain the data span
+    auto h_span = hf::make_span(args...);
+    auto h_data = h_span.data();        // can't be nullptr
+    auto h_size = h_span.size_bytes();
+    
+    // pull handle
     auto& h = v->_pull_handle();
 
-    std::cout << "running task " << v->_name << std::endl;
-
     HF_WITH_CUDA_DEVICE(h.device) {
+
+      std::cout << "pull " << h_data << ' ' << h_size << std::endl;
 
       // allocate the global memory
       if(h.d_data == nullptr) {
         assert(h.d_size == 0);
-        h.d_size = h.h_size;
+        h.d_size = h_size;
       }
       // reallocate the global memory
-      else if(h.d_size < h.h_size) {
+      else if(h.d_size < h_size) {
         assert(h.d_data != nullptr);
-        h.d_size = h.h_size;
+        h.d_size = h_size;
         HF_CHECK_CUDA(::cudaFree(h.d_data),
           "failed to free global memory in task ", name()
         )
@@ -347,21 +372,67 @@ inline void PullTask::_make_work() {
         "failed to allocate global memory in task ", name()
       );
       
-      // nothing to do if the host is null
-      if(h.h_data == nullptr) {
-        return;
-      }
-
       // transfer the memory
       HF_CHECK_CUDA(
         ::cudaMemcpyAsync(
-          h.d_data, h.h_data, h.h_size, cudaMemcpyHostToDevice, h.stream
+          h.d_data, h_data, h_size, cudaMemcpyHostToDevice, h.stream
         ),
         "failed to pull memory in task ", name()
       );
     }
   };
+
+  return *this;
 }
+    
+//// Function: pull
+//template <typename C>
+//PullTask PullTask::pull(C&& c) {
+//   
+//  _node->_work = [this, v=_node, c=std::forward<C>(c)] () {
+//    
+//    // obtain the data span
+//    auto h_span = c();
+//    auto h_data = h_span.data();        // can't be nullptr
+//    auto h_size = h_span.size_bytes();
+//    
+//    // pull handle
+//    auto& h = v->_pull_handle();
+//
+//    HF_WITH_CUDA_DEVICE(h.device) {
+//
+//      std::cout << "copy " << h_data << ' ' << h_size << std::endl;
+//
+//      // allocate the global memory
+//      if(h.d_data == nullptr) {
+//        assert(h.d_size == 0);
+//        h.d_size = h_size;
+//      }
+//      // reallocate the global memory
+//      else if(h.d_size < h_size) {
+//        assert(h.d_data != nullptr);
+//        h.d_size = h_size;
+//        HF_CHECK_CUDA(::cudaFree(h.d_data),
+//          "failed to free global memory in task ", name()
+//        )
+//      }
+//
+//      HF_CHECK_CUDA(::cudaMalloc(&(h.d_data), h.d_size),
+//        "failed to allocate global memory in task ", name()
+//      );
+//      
+//      // transfer the memory
+//      HF_CHECK_CUDA(
+//        ::cudaMemcpyAsync(
+//          h.d_data, h_data, h_size, cudaMemcpyHostToDevice, h.stream
+//        ),
+//        "failed to pull memory in task ", name()
+//      );
+//    }
+//  };
+//
+//  return *this;
+//}
   
 // ----------------------------------------------------------------------------
 
@@ -401,17 +472,16 @@ class PushTask : public TaskBase<PushTask> {
     /**
     @brief alters the host memory block to push from gpu
     
-    @param target the pointer to the beginning of the host memory block
-    @param source the source pull task that stores the gpu memory block
-    @param N number of bytes to push
+    @tparam ArgsT argements types
+    @param source a source pull task of a gpu memory block
+    @param args arguments to forward to construct a span object
     */
-    PushTask push(void* target, PullTask source, size_t N);
+    template <typename... ArgsT>
+    PushTask push(PullTask source, ArgsT&&... args);
     
   private:
 
     PushTask(Node* node);
-
-    void _make_work();
 };
 
 inline PushTask::PushTask(Node* node) : 
@@ -419,50 +489,74 @@ inline PushTask::PushTask(Node* node) :
 }
 
 // Function: push
-inline PushTask PushTask::push(void* target, PullTask source, size_t N) {
+template <typename... ArgsT>
+PushTask PushTask::push(PullTask source, ArgsT&&... args) {
 
   HF_THROW_IF(!_node,  "push task can't be empty");
   HF_THROW_IF(!source, "pull task can't be empty");
     
-  auto& handle = _node->_push_handle();
-  handle.h_data = target;
-  handle.source = source._node;
-  handle.h_size = N;
+  _node->_push_handle().source = source._node;
   
-  _make_work();
-
-  return *this;
-}
-
-// Procedure: _make_work
-inline void PushTask::_make_work() {
-
-  _node->_work = [this, v=_node] () {
-
-    auto& h = v->_push_handle();
+  _node->_work = [&, t=_node] () mutable {
     
-    if(h.h_data == nullptr || h.h_size == 0) {
-      return;
-    }
+    // obtain the data span
+    auto h_span = hf::make_span(args...);
+    auto h_data = h_span.data();        // can't be nullptr
+    auto h_size = h_span.size_bytes();
     
-    // get the device memory
+    // get the handle and device memory
+    auto& h = t->_push_handle();
     auto& s = h.source->_pull_handle();
-    
-    HF_WITH_CUDA_DEVICE(s.device) {
 
-      HF_THROW_IF(s.d_data == nullptr || s.d_size < h.h_size,
+    HF_WITH_CUDA_DEVICE(s.device) {
+      
+      std::cout << "push " << h_data << ' ' << h_size << std::endl;
+
+      HF_THROW_IF(s.d_data == nullptr || s.d_size < h_size,
         "invalid memory push from ", h.source->_name, " to ", name()
       ); 
 
       HF_CHECK_CUDA(
         ::cudaMemcpyAsync(
-          h.h_data, s.d_data, h.h_size, cudaMemcpyDeviceToHost, h.stream
+          h_data, s.d_data, h_size, cudaMemcpyDeviceToHost, h.stream
         ),
         "failed to push memory in task ", name()
       );
     }
   };
+
+  return *this;
 }
+
+//// Procedure: _make_work
+//inline void PushTask::_make_work() {
+//
+//  _node->_work = [this, v=_node] () {
+//
+//    auto& h = v->_push_handle();
+//
+//    if(h.h_data == nullptr || h.h_size == 0) {
+//      return;
+//    }
+//    
+//    // get the device memory
+//    auto& s = h.source->_pull_handle();
+//    
+//    HF_WITH_CUDA_DEVICE(s.device) {
+//
+//      HF_THROW_IF(s.d_data == nullptr || s.d_size < h.h_size,
+//        "invalid memory push from ", h.source->_name, " to ", name()
+//      ); 
+//
+//      HF_CHECK_CUDA(
+//        ::cudaMemcpyAsync(
+//          h.h_data, s.d_data, h.h_size, cudaMemcpyDeviceToHost, h.stream
+//        ),
+//        "failed to push memory in task ", name()
+//      );
+//    }
+//  };
+//}
 
 // ----------------------------------------------------------------------------
 
@@ -639,6 +733,12 @@ class KernelTask : public TaskBase<KernelTask> {
 
     template <typename T, typename... Ts>
     void _gather_sources(T&&, Ts&&...);
+
+    template<typename K, typename T, size_t ... I>
+    void _invoke_kernel(K, T, std::index_sequence<I ...>);
+
+    template<typename K, typename T>
+    void _invoke_kernel(K, T);
 };
 
 // Constructor
@@ -678,6 +778,24 @@ template <typename T, typename... Ts>
 void KernelTask::_gather_sources(T&& task, Ts&&... others) {
   _gather_sources(std::forward<T>(task));
   _gather_sources(std::forward<Ts>(others)...);
+}
+    
+// Procedure: _invoke_kernel
+template<typename K, typename T, size_t ... I>
+void KernelTask::_invoke_kernel(K f, T t, std::index_sequence<I ...>) {
+  auto& h = _node->_kernel_handle();
+  HF_WITH_CUDA_DEVICE(h.device) {
+    f<<<h.grid, h.block, h.shm, h.stream>>>(
+      _to_argument(std::get<I>(t))...
+    );
+  }
+}
+
+// Procedure: _invoke_kernel
+template<typename K, typename T>
+void KernelTask::_invoke_kernel(K f, T t) {
+  static constexpr auto size = std::tuple_size<T>::value;
+  _invoke_kernel(f, t, std::make_index_sequence<size>{});
 }
 
 // Procedure: grid_x
@@ -797,7 +915,7 @@ inline size_t KernelTask::shm() const {
 }
 
 template <typename F, typename... ArgsT>
-KernelTask KernelTask::kernel(F&& func, ArgsT&&... args) {
+KernelTask KernelTask::kernel(F&& f, ArgsT&&... args) {
   
   HF_THROW_IF(!_node, "kernel task is empty");
   
@@ -806,16 +924,24 @@ KernelTask KernelTask::kernel(F&& func, ArgsT&&... args) {
   
   // extract source pull tasks
   _gather_sources(args...);
+  
+  // assign kernel work. here we create a task to avoid dangling ref
+  // due to the builder pattern we enabled here
+  _node->_work = [
+    task=*this, f=std::forward<F>(f), t=make_stateful_tuple(std::forward<ArgsT>(args)...)
+  ] () mutable {
+    task._invoke_kernel(f, t);    
+  };
 
   // assign the work
-  _node->_work = [this, v=_node, func, args...] () {
-    auto& h = v->_kernel_handle();
-    HF_WITH_CUDA_DEVICE(h.device) {
-      func<<<h.grid, h.block, h.shm, h.stream>>>(
-        _to_argument(args)...
-      );
-    }
-  };
+  //_node->_work = [&, v=_node] () {
+  //  auto& h = v->_kernel_handle();
+  //  HF_WITH_CUDA_DEVICE(h.device) {
+  //    func<<<h.grid, h.block, h.shm, h.stream>>>(
+  //      _to_argument(args)...
+  //    );
+  //  }
+  //};
 
   return *this;
 }

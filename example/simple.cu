@@ -15,29 +15,28 @@ __global__ void hello_kernel(int id) {
     blockIdx.x, threadIdx.x, id
   );
 }
-  
-int main() {
 
+int main() {
+  
   // create a heteroflow
   hf::Heteroflow hf("simple");
 
-  float* h_X {nullptr};
-  float* h_Y {nullptr};
-  size_t n_X {100};
-  size_t n_Y {200};
+  std::vector<float> h_X, h_Y;
+  size_t n_X {0}, n_Y {0};
 
-  auto new_X = hf.host([&](){ h_X = new float [n_X]; }).name("host_X");
-  auto new_Y = hf.host([&](){ h_Y = new float [n_Y]; }).name("host_Y");
-  auto gpu_X = hf.pull(h_X, n_X*sizeof(float)).name("pull_X");
-  auto gpu_Y = hf.pull(h_Y, n_Y*sizeof(float)).name("pull_Y");
+  auto new_X = hf.host([&](){ h_X.resize(n_X=100, 1.0f); }).name("host_X");
+  auto new_Y = hf.host([&](){ h_Y.resize(n_Y=200, 2.0f); }).name("host_Y");
+
+  auto gpu_X = hf.pull(h_X).name("pull_X"); 
+  auto gpu_Y = hf.pull(h_Y).name("pull_Y");
 
   // kernel task (depends on gpu_X and gpu_Y)
-  auto kernel = hf.kernel(simple, gpu_X, n_X, gpu_Y, n_Y).name("kernel");
+  auto kernel = hf.kernel(simple, gpu_X, 100, gpu_Y, n_Y).name("kernel");
 
-  auto push_X = hf.push(h_X, gpu_X, n_X*sizeof(float)).name("push_X");
-  auto push_Y = hf.push(h_Y, gpu_Y, n_Y*sizeof(float)).name("push_Y");
-  auto kill_X = hf.host([&](){ delete [] h_X; }).name("kill_X");
-  auto kill_Y = hf.host([&](){ delete [] h_Y; }).name("kill_Y");
+  auto push_X = hf.push(gpu_X, h_X).name("push_X");
+  auto push_Y = hf.push(gpu_Y, h_Y).name("push_Y");
+  auto kill_X = hf.host([&](){ h_X.clear(); }).name("kill_X");
+  auto kill_Y = hf.host([&](){ h_Y.clear(); }).name("kill_Y");
 
   // build up the dependency
   new_X.precede(gpu_X);

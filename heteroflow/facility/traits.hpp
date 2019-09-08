@@ -66,8 +66,6 @@ struct function_traits<R(Args...)> {
 };
 
 
-
-
 }  // end of namespace hf -----------------------------------------------------
 
 

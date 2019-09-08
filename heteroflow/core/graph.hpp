@@ -32,13 +32,10 @@ class Node {
   // Pull data
   struct Pull {
     Pull() = default;
-    Pull(const void*, size_t);
     ~Pull();
     std::atomic<int> device {-1};
     cudaStream_t     stream {0};
-    const void*      h_data {nullptr};
     void*            d_data {nullptr};
-    size_t           h_size {0};
     size_t           d_size {0};
     int              height {0};
     Node*            parent {nullptr};
@@ -47,11 +44,8 @@ class Node {
   // Push data
   struct Push {
     Push() = default;
-    Push(void*, Node*, size_t);
     cudaStream_t stream {0};
-    void*        h_data {nullptr};
     Node*        source {nullptr};
-    size_t       h_size {0};
   };
   
   // Kernel data
@@ -135,12 +129,6 @@ class Node {
 // Pull field
 // ----------------------------------------------------------------------------
 
-// Constructor
-inline Node::Pull::Pull(const void* data, size_t N) : 
-  h_data {data},
-  h_size {N} {
-}
-
 // Destructor
 inline Node::Pull::~Pull() {
   HF_WITH_CUDA_DEVICE(device) {
@@ -152,13 +140,6 @@ inline Node::Pull::~Pull() {
 // Push field
 // ----------------------------------------------------------------------------
 
-// Constructor
-inline Node::Push::Push(void* tgt, Node* src, size_t N) : 
-  h_data {tgt},
-  source {src},
-  h_size {N} {
-}
-    
 // ----------------------------------------------------------------------------
 // Kernel field
 // ----------------------------------------------------------------------------
