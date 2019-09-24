@@ -27,14 +27,14 @@ class Node {
   
   // Host data
   struct Host {
+    std::function<void()> work;
   };
   
   // Pull data
   struct Pull {
     Pull() = default;
-    ~Pull();
+    std::function<void(cuda::Allocator&, cudaStream_t)> work;
     std::atomic<int> device {-1};
-    cudaStream_t     stream {0};
     void*            d_data {nullptr};
     size_t           d_size {0};
     int              height {0};
@@ -44,15 +44,15 @@ class Node {
   // Push data
   struct Push {
     Push() = default;
-    cudaStream_t stream {0};
+    std::function<void(cudaStream_t)> work;
     Node*        source {nullptr};
   };
   
   // Kernel data
   struct Kernel {
     Kernel() = default;
+    std::function<void(cudaStream_t)> work;
     std::atomic<int> device {-1};
-    cudaStream_t stream     {0};
     ::dim3       grid       {1, 1, 1};
     ::dim3       block      {1, 1, 1}; 
     size_t       shm        {0};
@@ -80,16 +80,14 @@ class Node {
 
   private:
 
-    static constexpr int HOST = 0;
-    static constexpr int PULL = 1;
-    static constexpr int PUSH = 2;
-    static constexpr int KERNEL = 3;
+    static constexpr int HOST_IDX   = 0;
+    static constexpr int PULL_IDX   = 1;
+    static constexpr int PUSH_IDX   = 2;
+    static constexpr int KERNEL_IDX = 3;
 
     std::string _name;
 
     nonstd::variant<Host, Pull, Push, Kernel> _handle;
-
-    std::function<void()> _work;
 
     std::vector<Node*> _successors;
     std::vector<Node*> _dependents;
@@ -128,13 +126,6 @@ class Node {
 // ----------------------------------------------------------------------------
 // Pull field
 // ----------------------------------------------------------------------------
-
-// Destructor
-inline Node::Pull::~Pull() {
-  HF_WITH_CUDA_DEVICE(device) {
-    HF_CHECK_CUDA(::cudaFree(d_data), "failed to free device memory from pull");
-  }
-}
 
 // ----------------------------------------------------------------------------
 // Push field
@@ -220,32 +211,32 @@ inline size_t Node::num_dependents() const {
 
 // Function: is_host
 inline bool Node::is_host() const {
-  return _handle.index() == HOST;
+  return _handle.index() == HOST_IDX;
 }
 
 // Function: is_pull
 inline bool Node::is_pull() const {
-  return _handle.index() == PULL;
+  return _handle.index() == PULL_IDX;
 }
 
 // Function: is_push
 inline bool Node::is_push() const {
-  return _handle.index() == PUSH;
+  return _handle.index() == PUSH_IDX;
 }
 
 // Function: is_kernel
 inline bool Node::is_kernel() const {
-  return _handle.index() == KERNEL;
+  return _handle.index() == KERNEL_IDX;
 }
 
 // Function: _height
 inline int Node::_height() const {
   int idx = _handle.index();
-  if(idx == KERNEL) {
+  if(idx == KERNEL_IDX) {
     return _kernel_handle().height;
   }
   else {
-    assert(idx == PULL);
+    assert(idx == PULL_IDX);
     return _pull_handle().height;
   }
 }
@@ -253,11 +244,11 @@ inline int Node::_height() const {
 // Function: _parent
 inline Node* Node::_parent() const {
   int idx = _handle.index();
-  if(idx == KERNEL) {
+  if(idx == KERNEL_IDX) {
     return _kernel_handle().parent;
   }
   else {
-    assert(idx == PULL);
+    assert(idx == PULL_IDX);
     return _pull_handle().parent;
   }
 }
@@ -265,11 +256,11 @@ inline Node* Node::_parent() const {
 // Function: _height
 inline void Node::_height(int h) {
   int idx = _handle.index();
-  if(idx == KERNEL) {
+  if(idx == KERNEL_IDX) {
     _kernel_handle().height = h;
   }
   else {
-    assert(idx == PULL);
+    assert(idx == PULL_IDX);
     _pull_handle().height = h;
   }
 }
@@ -277,11 +268,11 @@ inline void Node::_height(int h) {
 // Function: _parent
 inline void Node::_parent(Node* ptr) {
   int idx = _handle.index();
-  if(idx == KERNEL) {
+  if(idx == KERNEL_IDX) {
     _kernel_handle().parent = ptr;
   }
   else {
-    assert(idx == PULL);
+    assert(idx == PULL_IDX);
     _pull_handle().parent = ptr;
   }
 }
@@ -289,11 +280,11 @@ inline void Node::_parent(Node* ptr) {
 // Function: _device
 inline std::atomic<int>& Node::_device() {
   int idx = _handle.index();
-  if(idx == KERNEL) {
+  if(idx == KERNEL_IDX) {
     return _kernel_handle().device;
   }
   else {
-    assert(idx == PULL);
+    assert(idx == PULL_IDX);
     return _pull_handle().device;
   }
 }

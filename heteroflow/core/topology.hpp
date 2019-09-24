@@ -67,9 +67,24 @@ inline void Topology::_bind(Graph& g) {
     if(node->num_successors() == 0) {
       _num_sinks++;
     }
+    
+    if(node->is_kernel()) {
+      auto& h = node->_kernel_handle();
+      assert(h.device == -1);
+      for(auto s : h.sources) {
+        node->_union(s);
+      }
+    }
   }
-  _cached_num_sinks = _num_sinks;
 
+  _cached_num_sinks = _num_sinks;
+  
+  // path compression
+  for(auto& node : g) {
+    if(node->is_kernel() || node->is_pull()) {
+      std::cout << node->_name << ' ' << node->_root()->_name << std::endl;
+    }
+  }
 }
 
 // Procedure: _recover_num_sinks

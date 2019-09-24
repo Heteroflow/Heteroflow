@@ -79,44 +79,19 @@ class PullTask;
 class HostTask;
 class KernelTask;
 
+//template <typename T>
+//struct stateful_decay {
+//  using type = T;
+//};
+
 template <typename T>
-struct stateful_decay {
-  using type = T;
+struct stateful_decay : std::conditional<
+  std::is_same<std::decay_t<T>, PullTask>::value, PullTask, T> {
 };
 
 template <typename T>
 struct stateful_decay<T&&> {
   using type = T;
-};
-
-template <>
-struct stateful_decay<PullTask&&> {
-  using type = PullTask;
-};
-
-template <>
-struct stateful_decay<PullTask&> {
-  using type = PullTask;
-};
-
-template <>
-struct stateful_decay<PullTask> {
-  using type = PullTask;
-};
-
-template <>
-struct stateful_decay<const PullTask&&> {
-  using type = PullTask;
-};
-
-template <>
-struct stateful_decay<const PullTask&> {
-  using type = PullTask;
-};
-
-template <>
-struct stateful_decay<const PullTask> {
-  using type = PullTask;
 };
 
 template <typename T>

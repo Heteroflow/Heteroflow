@@ -13,7 +13,7 @@ namespace hf{ namespace cuda {
 */
 inline size_t num_devices() {
 	int N = 0;
-  HF_CHECK_CUDA(::cudaGetDeviceCount(&N), "failed to get device count");
+  HF_CHECK_CUDA(cudaGetDeviceCount(&N), "failed to get device count");
 	return N;
 }
 
@@ -22,7 +22,7 @@ inline size_t num_devices() {
 */
 inline int get_device() {
   int id;
-  HF_CHECK_CUDA(::cudaGetDevice(&id), "failed to get current device id");
+  HF_CHECK_CUDA(cudaGetDevice(&id), "failed to get current device id");
 	return id;
 }
 
@@ -30,7 +30,7 @@ inline int get_device() {
 @brief switches to a given device context
 */
 inline void set_device(int id) {
-  HF_CHECK_CUDA(::cudaSetDevice(id), "failed to switch to device ", id);
+  HF_CHECK_CUDA(cudaSetDevice(id), "failed to switch to device ", id);
 }
 
 /** @class ScopedDevice
@@ -52,19 +52,19 @@ class ScopedDevice {
 
 // Constructor
 inline ScopedDevice::ScopedDevice(int dev) { 
-  HF_CHECK_CUDA(::cudaGetDevice(&_p), "failed to get current device scope");
+  HF_CHECK_CUDA(cudaGetDevice(&_p), "failed to get current device scope");
   if(_p == dev) {
     _p = -1;
   }
   else {
-    HF_CHECK_CUDA(::cudaSetDevice(dev), "failed to scope on device ", dev);
+    HF_CHECK_CUDA(cudaSetDevice(dev), "failed to scope on device ", dev);
   }
 }
 
 // Destructor
 inline ScopedDevice::~ScopedDevice() { 
   if(_p != -1) {
-    HF_CHECK_CUDA(::cudaSetDevice(_p), "failed to scope back to device ", _p);
+    HF_CHECK_CUDA(cudaSetDevice(_p), "failed to scope back to device ", _p);
   }
 }
 
@@ -72,25 +72,7 @@ inline ScopedDevice::~ScopedDevice() {
 // Memory-related 
 // ----------------------------------------------------------------------------
 
-/**
-@brief allocate memory on current device
 
-@param N amount of memory to allocate in bytes
-*/
-inline void* allocate(size_t N) {
-	void* p = nullptr;
-  HF_CHECK_CUDA(::cudaMalloc(&p, N), "failed to allocate global memory");
-	return p;
-}
-
-/**
-@brief deallocates a block of memory
-
-@param ptr the pointer to the memory to deallocate
-*/
-inline void free(void* ptr) {
-  HF_CHECK_CUDA(::cudaFree(ptr), "failed to free ", ptr);
-}
 
 /**
 @brief asynchronously copies N bytes of data from a given source to the target
@@ -103,7 +85,7 @@ inline void free(void* ptr) {
 @param id CUDA stream id to enqueue this operation
 */
 inline void memcpy(void* T, const void* S, size_t N, cudaStream_t id) {
-  HF_CHECK_CUDA(::cudaMemcpyAsync(T, S, N, cudaMemcpyDefault, id), 
+  HF_CHECK_CUDA(cudaMemcpyAsync(T, S, N, cudaMemcpyDefault, id), 
     "failed to copy memory from ", S, " to ", T, " via stream ", id
   );
 }
@@ -118,7 +100,7 @@ inline void memcpy(void* T, const void* S, size_t N, cudaStream_t id) {
 @param N number of bytes to transfer
 */
 inline void memcpy(void* T, const void* S, size_t N) {
-  HF_CHECK_CUDA(::cudaMemcpy(T, S, N, cudaMemcpyDefault), 
+  HF_CHECK_CUDA(cudaMemcpy(T, S, N, cudaMemcpyDefault), 
     "failed to copy memory from ", S, " to ", T
   );
 }
@@ -132,7 +114,7 @@ inline void memcpy(void* T, const void* S, size_t N) {
 */
 inline cudaStream_t create_stream() {
   cudaStream_t s;
-  HF_CHECK_CUDA(::cudaStreamCreate(&s), "failed to create a stream");
+  HF_CHECK_CUDA(cudaStreamCreate(&s), "failed to create a stream");
   return s;
 }
 
@@ -140,15 +122,30 @@ inline cudaStream_t create_stream() {
 @brief destroys a CUDA stream
 */
 inline void destroy_stream(cudaStream_t s) {
-  HF_CHECK_CUDA(::cudaStreamDestroy(s), "failed to destroy stream ", s);
+  HF_CHECK_CUDA(cudaStreamDestroy(s), "failed to destroy stream ", s);
 }
+
+// ----------------------------------------------------------------------------
+// Allocator
+// ----------------------------------------------------------------------------
+class Allocator {
+
+  public:
+
+    void* allocate(size_t N) {
+	    void* p = nullptr;
+      HF_CHECK_CUDA(cudaMalloc(&p, N), "failed to allocate global memory");
+	    return p;
+    }
+
+    void deallocate(void* ptr) {
+      HF_CHECK_CUDA(cudaFree(ptr), "failed to free ", ptr);
+    }
+};
+
 
 }}  // end of namespace hf::cuda ----------------------------------------------
 
 #define HF_WITH_CUDA_DEVICE(id) \
   for (bool flag = true; flag; ) \
     for (hf::cuda::ScopedDevice __hf__spd__(id); flag; flag = false)
-
-
-
-

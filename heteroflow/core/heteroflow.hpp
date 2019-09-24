@@ -78,6 +78,26 @@ Heteroflow::Heteroflow(S&& name) : _name {std::forward<S>(name)} {
 // Destructor
 inline Heteroflow::~Heteroflow() {
   assert(_topologies.empty());
+
+  for(auto& n : _graph) {
+    auto idx = n->_handle.index();
+    if(idx == Node::PULL_IDX) {
+      auto& h = n->_pull_handle();
+      assert(h.device == -1);
+      assert(h.d_data == nullptr);
+      assert(h.d_size == 0);
+      assert(h.height == 0);
+      assert(h.parent == nullptr);
+    }
+    else if(idx == Node::PUSH_IDX) {
+    }
+    else if(idx == Node::KERNEL_IDX) {
+      auto& h = n->_kernel_handle();
+      assert(h.device == -1);
+      assert(h.height == 0);
+      assert(h.parent == nullptr);
+    }
+  }
 }
 
 // Procedure: name

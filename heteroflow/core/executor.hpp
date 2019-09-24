@@ -26,6 +26,8 @@ class Executor {
     std::mt19937 rdgen { std::random_device{}() };
     WorkStealingQueue<Node*> queue;
     Node* cache {nullptr};
+    std::vector<cudaStream_t> streams;
+    std::vector<cudaEvent_t> events;
   };
     
   struct PerThread {
@@ -35,11 +37,8 @@ class Executor {
   
   struct Device {
     Device(int);
-    ~Device();
     int id;
-    cudaStream_t push_stream;
-    cudaStream_t pull_stream;
-    cudaStream_t kernel_stream;
+    cuda::Allocator allocator;
   };
 
   public:
@@ -166,6 +165,8 @@ class Executor {
     bool _wait_for_task(unsigned me, nonstd::optional<Node*>&);
 
     void _spawn();
+    void _create_streams(unsigned);
+    void _remove_streams(unsigned);
     void _exploit_task(unsigned, nonstd::optional<Node*>&);
     void _explore_task(unsigned, nonstd::optional<Node*>&);
     void _schedule(Node*, bool);
@@ -175,7 +176,13 @@ class Executor {
     void _decrement_topology();
     void _decrement_topology_and_notify();
     void _tear_down_topology(Topology*); 
+    void _run_prologue(Heteroflow&);
+    void _run_epilogue(Heteroflow&);
 };
+
+// ----------------------------------------------------------------------------
+// Executor::Worker
+// ----------------------------------------------------------------------------
 
 // ----------------------------------------------------------------------------
 // Executor::Device
@@ -184,42 +191,6 @@ class Executor {
 // Constructor
 inline Executor::Device::Device(int dev) :
   id {dev} {
-  
-  HF_WITH_CUDA_DEVICE(id) {
-    HF_CHECK_CUDA(::cudaStreamCreate(&pull_stream), 
-      "failed to create pull stream for device ", id
-    );
-    HF_CHECK_CUDA(::cudaStreamCreate(&push_stream), 
-      "failed to create push stream for device ", id
-    );
-    HF_CHECK_CUDA(::cudaStreamCreate(&kernel_stream), 
-      "failed to create kernel stream for device ", id
-    );
-  }
-}
-
-// Destructor
-inline Executor::Device::~Device() {
-  HF_WITH_CUDA_DEVICE(id) {
-    HF_CHECK_CUDA(::cudaStreamSynchronize(pull_stream),
-      "failed to sync pull stream ", pull_stream, " on device ", id
-    );
-    HF_CHECK_CUDA(::cudaStreamDestroy(pull_stream),
-      "failed to destroy pull stream ", pull_stream, " on device ", id
-    );
-    HF_CHECK_CUDA(::cudaStreamSynchronize(push_stream),
-      "failed to sync push stream ", push_stream, " on device ", id
-    );
-    HF_CHECK_CUDA(::cudaStreamDestroy(push_stream),
-      "failed to destroy push stream ", push_stream, " on device ", id
-    );
-    HF_CHECK_CUDA(::cudaStreamSynchronize(kernel_stream),
-      "failed to sync kernel stream ", kernel_stream, " on device ", id
-    );
-    HF_CHECK_CUDA(::cudaStreamDestroy(kernel_stream),
-      "failed to destroy kernel stream ", kernel_stream, " on device ", id
-    );
-  }
 }
 
 // ----------------------------------------------------------------------------
@@ -277,16 +248,61 @@ inline Executor::PerThread& Executor::_per_thread() const {
   return pt;
 }
 
+// Procedure: _create_streams
+inline void Executor::_create_streams(unsigned i) {      
+
+  auto& w = _workers[i];
+
+  // per-thread gpu storage
+  w.streams.resize(_devices.size());
+  w.events .resize(_devices.size());
+  
+  for(unsigned j=0; j<_devices.size(); ++j) {
+    HF_WITH_CUDA_DEVICE(_devices[j].id) {
+      HF_CHECK_CUDA(cudaStreamCreate(&w.streams[j]), 
+        "failed to create stream ", i, " on device ", _devices[j].id
+      );
+      HF_CHECK_CUDA(cudaEventCreate(&w.events[j]),
+        "failed to create event ", i, " on device ", _devices[j].id
+      );
+    }
+  }
+}
+
+// Procedure: _remove_streams
+inline void Executor::_remove_streams(unsigned i) {
+
+  auto& w = _workers[i];
+
+  for(unsigned j=0; j<_devices.size(); ++j) {
+    HF_WITH_CUDA_DEVICE(_devices[j].id) {
+      HF_CHECK_CUDA(cudaStreamSynchronize(w.streams[j]), 
+        "failed to sync stream ", i, " on device ", _devices[j].id
+      );
+      HF_CHECK_CUDA(cudaStreamDestroy(w.streams[j]), 
+        "failed to destroy stream ", i, " on device ", _devices[j].id
+      );
+      HF_CHECK_CUDA(cudaEventDestroy(w.events[j]),
+        "failed to destroy event ", i, " on device ", _devices[j].id
+      );
+    }
+  }
+}
+
 // Procedure: _spawn
 inline void Executor::_spawn() {
   
   for(unsigned i=0; i<_workers.size(); ++i) {
-    _threads.emplace_back([this, i] () -> void {
+    _threads.emplace_back([this] (unsigned i) -> void {
 
+      // per-thread storage
       PerThread& pt = _per_thread();  
       pt.pool = this;
       pt.worker_id = i;
-    
+      
+      // create gpu streams
+      _create_streams(i);
+     
       nonstd::optional<Node*> t;
       
       // must use 1 as condition instead of !done
@@ -301,7 +317,10 @@ inline void Executor::_spawn() {
         }
       }
       
-    });     
+      // clear gpu storages
+      _remove_streams(i);
+      
+    }, i);     
   }
 }
 
@@ -428,13 +447,12 @@ inline bool Executor::_wait_for_task(unsigned me, nonstd::optional<Node*>& t) {
 
 // Procedure: _invoke
 inline void Executor::_invoke(unsigned me, Node* node) {
-  // TODO
-  
+
   // Here we need to fetch the num_successors first to avoid the invalid memory
   // access caused by topology clear.
   const auto num_successors = node->num_successors();
   
-  // device assignment for gpu task only
+  // gpu task preprocessing
   if(node->is_kernel() || node->is_pull()) {
     
     auto root = node->_root();
@@ -470,7 +488,60 @@ inline void Executor::_invoke(unsigned me, Node* node) {
   }
   
   // Invoke the work at the node 
-  node->_work();
+  auto idx = node->_handle.index();
+  if(idx == Node::HOST_IDX) {
+    node->_host_handle().work();
+  }
+  else {
+    if(idx == Node::PUSH_IDX) {
+      auto& h = node->_push_handle();
+      int   d = h.source->_pull_handle().device;
+      HF_WITH_CUDA_DEVICE(d) {
+        HF_CHECK_CUDA(
+          ::cudaEventRecord(_workers[me].events[d], _workers[me].streams[d]),
+          "failed to record event ", me, " on device ", d
+        );
+        h.work(_workers[me].streams[d]);
+        HF_CHECK_CUDA(
+          ::cudaStreamWaitEvent(_workers[me].streams[d], _workers[me].events[d], 0),
+          "failed to sync event ", me, " on device ", d
+        );
+      }
+    }
+    else if(idx == Node::PULL_IDX) {
+      auto& h = node->_pull_handle();
+      int   d = h.device;
+      HF_WITH_CUDA_DEVICE(d) {
+        HF_CHECK_CUDA(
+          ::cudaEventRecord(_workers[me].events[d], _workers[me].streams[d]),
+          "failed to record event ", me, " on device ", d
+        );
+        h.work(_devices[d].allocator, _workers[me].streams[d]);
+        HF_CHECK_CUDA(
+          ::cudaStreamWaitEvent(_workers[me].streams[d], _workers[me].events[d], 0),
+          "failed to sync event ", me, " on device ", d
+        );
+      }
+    }
+    else{
+      auto& h = node->_kernel_handle();
+      int   d = h.device;
+      HF_WITH_CUDA_DEVICE(d) {
+        HF_CHECK_CUDA(
+          ::cudaEventRecord(_workers[me].events[d], _workers[me].streams[d]),
+          "failed to record event ", me, " on device ", d
+        );
+        h.work(_workers[me].streams[d]);
+        HF_CHECK_CUDA(
+          ::cudaStreamWaitEvent(_workers[me].streams[d], _workers[me].events[d], 0),
+          "failed to sync event ", me, " on device ", d
+        );
+      }
+    }
+  }
+  
+  // recover the runtime data  
+  node->_num_dependents = static_cast<int>(node->_dependents.size());
   
   // At this point, the node storage might be destructed.
   Node* cache {nullptr};
@@ -578,6 +649,7 @@ inline void Executor::_tear_down_topology(Topology* tpg) {
 
   // case 1: we still need to run the topology again
   if(!tpg->_pred()) {
+    std::cout << "another round" << std::endl;
     tpg->_recover_num_sinks();
     _schedule(tpg->_sources); 
   }
@@ -589,6 +661,12 @@ inline void Executor::_tear_down_topology(Topology* tpg) {
     }
 
     f._mtx.lock();
+    
+    // clear out the runtime meta
+    // TODO: move outside the lock?
+    std::cout << "running epilogue" << std::endl;
+    _run_epilogue(f);
+    std::cout << "finished epilogue" << std::endl;
 
     // If there is another run (interleave between lock)
     if(f._topologies.size() > 1) {
@@ -684,22 +762,6 @@ std::future<void> Executor::run_until(Heteroflow& f, P&& pred, C&& c) {
   assert(_workers.size() > 0);
   
   _increment_topology();
-  
-  // device mapping
-  for(auto& node : f._graph) {
-    if(node->is_kernel()) {
-      auto& h = node->_kernel_handle();
-      for(auto s : h.sources) {
-        node->_union(s);
-      }
-    }
-  }
-  
-  for(auto& node : f._graph) {
-    if(node->is_kernel() || node->is_pull()) {
-      std::cout << node->_name << ' ' << node->_root()->_name << std::endl;
-    }
-  }
 
   // Special case of predicate
   if(pred()) {
@@ -757,8 +819,6 @@ std::future<void> Executor::run_until(Heteroflow& f, P&& pred, C&& c) {
     
     if(f._topologies.size() == 1) {
       run_now = true;
-      //tpg->_bind(f._graph);
-      //_schedule(tpg->_sources);
     }
   }
   
@@ -772,6 +832,36 @@ std::future<void> Executor::run_until(Heteroflow& f, P&& pred, C&& c) {
   return future;
 }
 
+// Procedure: _run_epilogue
+// caller must acquire the lock of the heteroflow
+void Executor::_run_epilogue(Heteroflow& hf) {
+
+  for(auto& node : hf._graph) {
+
+    auto idx = node->_handle.index();
+
+    if(idx == Node::PULL_IDX) {
+      auto& h = node->_pull_handle();
+      assert(h.device != -1);
+      HF_WITH_CUDA_DEVICE(h.device) {
+        _devices[h.device].allocator.deallocate(h.d_data);
+      }
+      h.device = -1;
+      h.d_data = nullptr;
+      h.d_size = 0;
+      h.parent = nullptr;
+      h.height = 0;
+    }
+    else if(idx == Node::KERNEL_IDX) {
+      auto& h = node->_kernel_handle();
+      assert(h.device != -1);
+      h.device = -1;
+      h.parent = nullptr;
+      h.height = 0;
+    }
+  }
+
+}
 
 }  // end of namespace hf -----------------------------------------------------
 
