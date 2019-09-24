@@ -41,8 +41,7 @@ int main(void) {
   auto pull_x = hf.pull(x); 
   auto pull_y = hf.pull(y);           
   auto kernel = hf.kernel(saxpy, N, 2.0f, pull_x, pull_y)
-                  .grid_x((N+255)/256)
-                  .block_x(256)
+                  .grid_x((N+255)/256).block_x(256)
   auto push_x = hf.push(pull_x, x);
   auto push_y = hf.push(pull_y, y);
 
