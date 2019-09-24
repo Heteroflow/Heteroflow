@@ -1,6 +1,7 @@
 # Heteroflow <img align="right" width="10%" src="images/heteroflow-logo.png">
 
-A Modern C++ Parallel CPU-GPU Task Programming Library 
+A header-only C++ library to help you quickly write
+concurrent CPU-GPU programs
 
 :exclamation: This is a working repository with many things under construction,
 but with enough information to highlight the spirit of Heteroflow.
@@ -19,6 +20,7 @@ using modern C++ and Nvidia CUDA Toolkit.
 The following example [saxpy.cu](./examples/saxpy.cu) implements
 the canonical single-precision A·X Plus Y ("saxpy") operation.
 
+
 ```cpp
 #include <heteroflow/heteroflow.hpp>  // Heteroflow is header-only
 
@@ -30,28 +32,27 @@ __global__ void saxpy(int n, float a, float *x, float *y) {
 int main(void) {
 
   const int N = 1<<20;
-  
   std::vector<float> x, y;
 
-  hf::Executor executor;        
-  hf::Heteroflow hf("saxpy"); 
+  hf::Executor executor;              // create an executor
+  hf::Heteroflow hf("saxpy");         // create a task dependency graph 
 
   auto host_x = hf.host([&](){ x.resize(N, 1.0f); });
-  auto host_y = hf.host([&](){ y.resize(N, 2.0f); });;
+  auto host_y = hf.host([&](){ y.resize(N, 2.0f); });
   auto pull_x = hf.pull(x); 
   auto pull_y = hf.pull(y);           
   auto kernel = hf.kernel(saxpy, N, 2.0f, pull_x, pull_y)
-                  .grid_x((N+255)/256).block_x(256)
+                  .grid_x((N+255)/256)
+                  .block_x(256)
   auto push_x = hf.push(pull_x, x);
   auto push_y = hf.push(pull_y, y);
 
-  host_x.precede(pull_x); 
-  host_y.precede(pull_y);
-  kernel.precede(push_x, push_y).succeed(pull_x, pull_y);   
+  host_x.precede(pull_x);             // host_x runs before pull_x
+  host_y.precede(pull_y);             // host_y runs before pull_y
+  kernel.precede(push_x, push_y)      // kernel runs before push_x and push_y
+        .succeed(pull_x, pull_y);     // kernel runs after  pull_x and pull_Y
 
-  executor.run(hf).wait();
-  
-  return 0;
+  executor.run(hf).wait();            // execute the task dependency graph
 }
 ```
 
@@ -215,6 +216,11 @@ or it can result in undefined behavior.
 In most applications, you need only one executor to run multiple hteroflows
 each representing a specific part of your parallel decomposition.
 
+# System Requirements
+
+To use Heteroflow, you need a [Nvidia's CUDA Compiler (NVCC)][nvcc] 
+of version at least 9.0 to support C++14 standards.
+
 # License
 
 Heteroflow is licensed under the [MIT License](./LICENSE).
@@ -230,4 +236,5 @@ Heteroflow is licensed under the [MIT License](./LICENSE).
 [span-lite]:             https://github.com/martinmoene/span-lite
 
 [cuda-zone]:             https://developer.nvidia.com/cuda-zone
+[nvcc]:                  https://developer.nvidia.com/cuda-llvm-compiler
 
