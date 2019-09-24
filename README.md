@@ -35,23 +35,22 @@ int main(void) {
   
   std::vector<float> x, y;
 
-  hf::Executor executor;              // create an executor
-  hf::Heteroflow hf("saxpy");         // create a cpu-gpu task graph
+  hf::Executor executor;        
+  hf::Heteroflow hf("saxpy"); 
 
   auto host_x = hf.host([&](){ x.resize(N, 1.0f); });
   auto host_y = hf.host([&](){ y.resize(N, 2.0f); });;
-  auto pull_x = hf.pull(x);           // pull memory to a gpu device
+  auto pull_x = hf.pull(x); 
   auto pull_y = hf.pull(y);           
   auto kernel = hf.kernel(saxpy, N, 2.0f, pull_x, pull_y)
                   .grid_x((N+255)/256)
                   .block_x(256)
-  auto push_x = hf.push(pull_x, x);   // push memory back to the host
+  auto push_x = hf.push(pull_x, x);
   auto push_y = hf.push(pull_y, y);
 
-  host_x.precede(pull_x);             // host_x runs before pull_x
-  host_y.precede(pull_y);             // host_y runs before pull_y 
-  kernel.precede(push_x, push_y)      // kernel runs before push_x and push_y
-        .succeed(pull_x, pull_y);     // kernel runs after  pull_x and pull_y
+  host_x.precede(pull_x); 
+  host_y.precede(pull_y);
+  kernel.precede(push_x, push_y).succeed(pull_x, pull_y);   
 
   executor.run(hf).wait();
   
