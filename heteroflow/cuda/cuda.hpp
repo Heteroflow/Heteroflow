@@ -146,6 +146,13 @@ class Allocator {
 
 }}  // end of namespace hf::cuda ----------------------------------------------
 
-#define HF_WITH_CUDA_DEVICE(id) \
+#define HF_WITH_CUDA_CTX(id) \
   for (bool flag = true; flag; ) \
     for (hf::cuda::ScopedDevice __hf__spd__(id); flag; flag = false)
+
+#define HF_WITH_CUDA_CTX_RANGE(r)  \
+  for(decltype(r) id=0; id<r; ++id)  \
+    for(bool flag = true; flag; )  \
+      for(hf::cuda::ScopedDevice __hf__spd__(id); flag; flag = false)
+
+

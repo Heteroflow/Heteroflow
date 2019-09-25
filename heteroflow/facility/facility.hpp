@@ -24,3 +24,7 @@ namespace hf {
 using nonstd::make_span;
 
 }
+
+// alias namespace
+namespace nstd = nonstd;
+

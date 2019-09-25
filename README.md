@@ -8,8 +8,8 @@ but with enough information to highlight the spirit of Heteroflow.
 
 # Why Heteroflow?
 
-Modern parallel applications typically contain
-a broad use of CPUs and GPUs.
+Modern high-performance computing leverages a heterogeneous mix of 
+both CPU and GPU devices.
 However, concurrent CPU-GPU programming is notoriously difficult
 due to many implementation details.
 Heteroflow helps you deal with this challenge through a new programming model

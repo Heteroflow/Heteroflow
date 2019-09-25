@@ -384,7 +384,7 @@ void PullTask::_invoke_pull(
   // pull handle
   auto& h = _node->_pull_handle();
 
-  std::cout << "pull " << h_data << ' ' << h_size << std::endl;
+  //std::cout << "pull " << h_data << ' ' << h_size << std::endl;
 
   // allocate the global memory
   if(h.d_data == nullptr) {
@@ -400,7 +400,7 @@ void PullTask::_invoke_pull(
 
   h.d_data = a.allocate(h.d_size);
 
-  std::cout << "global memory " << h.d_data << ' ' << h.d_size << std::endl;
+  //std::cout << "global memory " << h.d_data << ' ' << h.d_size << std::endl;
   
   // transfer the memory
   HF_CHECK_CUDA(
@@ -500,7 +500,7 @@ void PushTask::_invoke_push(T t, cudaStream_t stream) {
   auto& h = _node->_push_handle();
   auto& s = h.source->_pull_handle();
 
-  std::cout << "push " << h_data << ' ' << h_size << std::endl;
+  //std::cout << "push " << h_data << ' ' << h_size << std::endl;
 
   HF_THROW_IF(s.d_data == nullptr || s.d_size < h_size,
     "invalid memory push from ", h.source->_name, " to ", name()

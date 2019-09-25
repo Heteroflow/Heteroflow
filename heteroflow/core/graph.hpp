@@ -29,12 +29,12 @@ class Node {
   struct Host {
     std::function<void()> work;
   };
-  
+
   // Pull data
   struct Pull {
     Pull() = default;
     std::function<void(cuda::Allocator&, cudaStream_t)> work;
-    std::atomic<int> device {-1};
+    int              device {-1};
     void*            d_data {nullptr};
     size_t           d_size {0};
     int              height {0};
@@ -52,7 +52,7 @@ class Node {
   struct Kernel {
     Kernel() = default;
     std::function<void(cudaStream_t)> work;
-    std::atomic<int> device {-1};
+    int          device {-1};
     ::dim3       grid       {1, 1, 1};
     ::dim3       block      {1, 1, 1}; 
     size_t       shm        {0};
@@ -60,7 +60,7 @@ class Node {
     int          height     {0};
     Node*        parent     {nullptr};
   };
-
+  
   public:
 
     template <typename... ArgsT>
@@ -87,7 +87,7 @@ class Node {
 
     std::string _name;
 
-    nonstd::variant<Host, Pull, Push, Kernel> _handle;
+    nstd::variant<Host, Pull, Push, Kernel> _handle;
 
     std::vector<Node*> _successors;
     std::vector<Node*> _dependents;
@@ -99,14 +99,14 @@ class Node {
     Node* _root();
     Node* _parent() const;
     
+    void _device(int);
     void _height(int);
     void _parent(Node*);
     void _union(Node*);
     void _precede(Node*);
 
     int _height() const;
-
-    std::atomic<int>& _device();
+    int _device() const;
 
     Host& _host_handle();
     Pull& _pull_handle();
@@ -154,42 +154,42 @@ inline void Node::_precede(Node* rhs) {
 
 // Function: _host_handle    
 inline Node::Host& Node::_host_handle() {
-  return nonstd::get<Host>(_handle);
+  return nstd::get<Host>(_handle);
 }
 
 // Function: _host_handle    
 inline const Node::Host& Node::_host_handle() const {
-  return nonstd::get<Host>(_handle);
+  return nstd::get<Host>(_handle);
 }
 
 // Function: _push_handle    
 inline Node::Push& Node::_push_handle() {
-  return nonstd::get<Push>(_handle);
+  return nstd::get<Push>(_handle);
 }
 
 // Function: _push_handle    
 inline const Node::Push& Node::_push_handle() const {
-  return nonstd::get<Push>(_handle);
+  return nstd::get<Push>(_handle);
 }
 
 // Function: _pull_handle    
 inline Node::Pull& Node::_pull_handle() {
-  return nonstd::get<Pull>(_handle);
+  return nstd::get<Pull>(_handle);
 }
 
 // Function: _pull_handle    
 inline const Node::Pull& Node::_pull_handle() const {
-  return nonstd::get<Pull>(_handle);
+  return nstd::get<Pull>(_handle);
 }
 
 // Function: _kernel_handle    
 inline Node::Kernel& Node::_kernel_handle() {
-  return nonstd::get<Kernel>(_handle);
+  return nstd::get<Kernel>(_handle);
 }
 
 // Function: _kernel_handle    
 inline const Node::Kernel& Node::_kernel_handle() const {
-  return nonstd::get<Kernel>(_handle);
+  return nstd::get<Kernel>(_handle);
 }
 
 // Function: dump
@@ -231,62 +231,83 @@ inline bool Node::is_kernel() const {
 
 // Function: _height
 inline int Node::_height() const {
-  int idx = _handle.index();
-  if(idx == KERNEL_IDX) {
-    return _kernel_handle().height;
-  }
-  else {
-    assert(idx == PULL_IDX);
-    return _pull_handle().height;
-  }
+
+  struct visitor {
+    int operator () (const Host&   h) const { return -1; }
+    int operator () (const Push&   h) const { return -1; }
+    int operator () (const Pull&   h) const { return h.height; }
+    int operator () (const Kernel& h) const { return h.height; }
+  };
+
+  return nstd::visit(visitor{}, _handle);
 }
 
 // Function: _parent
 inline Node* Node::_parent() const {
-  int idx = _handle.index();
-  if(idx == KERNEL_IDX) {
-    return _kernel_handle().parent;
-  }
-  else {
-    assert(idx == PULL_IDX);
-    return _pull_handle().parent;
-  }
+  
+  struct visitor {
+    Node* operator () (const Host&   h) const { return nullptr; }
+    Node* operator () (const Push&   h) const { return nullptr; }
+    Node* operator () (const Pull&   h) const { return h.parent; }
+    Node* operator () (const Kernel& h) const { return h.parent; }
+  };
+
+  return nstd::visit(visitor{}, _handle);
 }
 
 // Function: _height
 inline void Node::_height(int h) {
-  int idx = _handle.index();
-  if(idx == KERNEL_IDX) {
-    _kernel_handle().height = h;
-  }
-  else {
-    assert(idx == PULL_IDX);
-    _pull_handle().height = h;
-  }
+  
+  struct visitor {
+    int v;
+    void operator () (Host&   h) { }
+    void operator () (Push&   h) { }
+    void operator () (Pull&   h) { h.height = v; }
+    void operator () (Kernel& h) { h.height = v; }
+  };
+
+  nstd::visit(visitor{h}, _handle);
 }
 
 // Function: _parent
 inline void Node::_parent(Node* ptr) {
-  int idx = _handle.index();
-  if(idx == KERNEL_IDX) {
-    _kernel_handle().parent = ptr;
-  }
-  else {
-    assert(idx == PULL_IDX);
-    _pull_handle().parent = ptr;
-  }
+  
+  struct visitor {
+    Node* v;
+    void operator () (Host&   h) { }
+    void operator () (Push&   h) { }
+    void operator () (Pull&   h) { h.parent = v; }
+    void operator () (Kernel& h) { h.parent = v; }
+  };
+
+  nstd::visit(visitor{ptr}, _handle);
 }
 
 // Function: _device
-inline std::atomic<int>& Node::_device() {
-  int idx = _handle.index();
-  if(idx == KERNEL_IDX) {
-    return _kernel_handle().device;
-  }
-  else {
-    assert(idx == PULL_IDX);
-    return _pull_handle().device;
-  }
+inline void Node::_device(int d) {
+
+  struct visitor {
+    int v;
+    void operator () (Host&   h) { }
+    void operator () (Push&   h) { }
+    void operator () (Pull&   h) { h.device = v; }
+    void operator () (Kernel& h) { h.device = v; }
+  };
+
+  nstd::visit(visitor{d}, _handle);
+}
+
+// Function: _device
+inline int Node::_device() const {
+
+  struct visitor {
+    int operator () (const Host&   h) const { return -1; }
+    int operator () (const Push&   h) const { return -1; }
+    int operator () (const Pull&   h) const { return h.device; }
+    int operator () (const Kernel& h) const { return h.device; }
+  };
+
+  return nstd::visit(visitor{}, _handle);
 }
 
 // Function: _root
