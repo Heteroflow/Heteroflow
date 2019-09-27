@@ -43,7 +43,7 @@ int main(void) {
   auto pull_y = hf.pull(y);           
   auto kernel = hf.kernel(saxpy, N, 2.0f, pull_x, pull_y)
                   .grid_x((N+255)/256)
-                  .block_x(256)
+                  .block_x(256);
   auto push_x = hf.push(pull_x, x);
   auto push_y = hf.push(pull_y, y);
 
@@ -126,6 +126,7 @@ a [std::span][std::span] object by which we perform
 data copy in the same way as the pull task.
 
 ```cpp
+// data1 and data2 are from the pull example above
 hf::PushTask push1 = heteroflow.push(pull1, data1);      // copy data back to data1
 hf::PullTask push2 = heteroflow.pull(pull2, data2, 10);  // copy data back to data2
 ```
@@ -140,19 +141,19 @@ each pull task can convert to a pointer of whatever data type specified
 in the kernel function.
 
 ```cpp
-__global__ void my_kernel1(int* data, int N);
-__global__ void my_kernel2(float* data, int N);
+__global__ void k1(int* data, int N);
+__global__ void k2(float* data, int N);
 
-hf::KernelTask k1 = hf.kernel(pull1, 100);  // convert the GPU data of pull1 to int*
-hf::KernelTask k2 = hf.kernel(pull2, 10);   // convert the GPU data of pull2 to float*
+hf::KernelTask k1 = hf.kernel(k1, pull1, 100);  // convert the GPU data of pull1 to int*
+hf::KernelTask k2 = hf.kernel(k2, pull2, 10);   // convert the GPU data of pull2 to float*
 ```
 
 The kernel task provides a rich set of methods to let you alter
 the kernel configuration.
 
 ```cpp
-k1.grid_x(N/256).block_x(256);              // configure the x dimension
-k2.grid(N/256, 1, 1).block(256, 1, 1);      // configure the x-y-z dimension
+k1.grid_x(N/256).block_x(256);                  // configure the x dimension
+k2.grid(N/256, 1, 1).block(256, 1, 1);          // configure the x-y-z dimension
 ```
 
 Heteroflow gives users full privileges to leverage their domain-specific knowledge
