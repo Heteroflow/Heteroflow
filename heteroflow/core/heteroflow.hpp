@@ -86,17 +86,19 @@ inline Heteroflow::~Heteroflow() {
       assert(h.device == -1);
       assert(h.d_data == nullptr);
       assert(h.d_size == 0);
-      assert(h.height == 0);
-      assert(h.parent == nullptr);
+      //assert(h.height == 0);
+      //assert(h.parent == nullptr);
     }
     else if(idx == Node::PUSH_IDX) {
     }
     else if(idx == Node::KERNEL_IDX) {
       auto& h = n->_kernel_handle();
       assert(h.device == -1);
-      assert(h.height == 0);
-      assert(h.parent == nullptr);
+      //assert(h.height == 0);
+      //assert(h.parent == nullptr);
     }
+    assert(n->_height == 0);
+    assert(n->_parent == n.get());
   }
 }
 

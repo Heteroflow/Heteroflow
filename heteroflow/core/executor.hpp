@@ -881,16 +881,12 @@ inline void Executor::_pull_epilogue(Node::Pull& h) {
   h.device = -1;
   h.d_data = nullptr;
   h.d_size = 0;
-  h.parent = nullptr;
-  h.height = 0;
 }
 
 // Procedure: _kernel_epilogue
 inline void Executor::_kernel_epilogue(Node::Kernel& h) {
   assert(h.device != -1);
   h.device = -1;
-  h.parent = nullptr;
-  h.height = 0;
 }
 
 // Procedure: _run_epilogue
@@ -912,6 +908,8 @@ inline void Executor::_run_epilogue(Topology* tpg) {
 
   for(auto& node : graph) {
     nstd::visit(visitor{*this}, node->_handle);
+    node->_parent = node.get();;
+    node->_height = 0;
   }
 }
 

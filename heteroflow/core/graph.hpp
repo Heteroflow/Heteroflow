@@ -37,8 +37,6 @@ class Node {
     int              device {-1};
     void*            d_data {nullptr};
     size_t           d_size {0};
-    int              height {0};
-    Node*            parent {nullptr};
   };  
   
   // Push data
@@ -52,13 +50,11 @@ class Node {
   struct Kernel {
     Kernel() = default;
     std::function<void(cudaStream_t)> work;
-    int          device {-1};
+    int          device     {-1};
     ::dim3       grid       {1, 1, 1};
     ::dim3       block      {1, 1, 1}; 
     size_t       shm        {0};
     std::vector<Node*> sources;
-    int          height     {0};
-    Node*        parent     {nullptr};
   };
   
   public:
@@ -93,19 +89,22 @@ class Node {
     std::vector<Node*> _dependents;
     
     std::atomic<int> _num_dependents {0};
+
+    Node* _parent {this};
+    int   _height {0};
     
     Topology* _topology {nullptr};
 
     Node* _root();
-    Node* _parent() const;
+    //Node* _parent() const;
     
     void _device(int);
-    void _height(int);
-    void _parent(Node*);
+    //void _height(int);
+    //void _parent(Node*);
     void _union(Node*);
     void _precede(Node*);
 
-    int _height() const;
+    //int _height() const;
     int _device() const;
 
     Host& _host_handle();
@@ -229,7 +228,7 @@ inline bool Node::is_kernel() const {
   return _handle.index() == KERNEL_IDX;
 }
 
-// Function: _height
+/*// Function: _height
 inline int Node::_height() const {
 
   struct visitor {
@@ -281,7 +280,7 @@ inline void Node::_parent(Node* ptr) {
   };
 
   nstd::visit(visitor{ptr}, _handle);
-}
+} */
 
 // Function: _device
 inline void Node::_device(int d) {
@@ -312,32 +311,35 @@ inline int Node::_device() const {
 
 // Function: _root
 inline Node* Node::_root() {
-  Node* p = _parent();
-  if(p == nullptr) {
-    return this;
+  auto ptr = this;
+  while(ptr != _parent) {
+    _parent = _parent->_parent; 
+    ptr = _parent;
   }
-  p = p->_root();
-  _parent(p);
-  return p;
+  return ptr;
 }
 
 // Procedure: _union
 inline void Node::_union(Node* y) {
 
+  if(_parent == y->_parent) {
+    return;
+  }
+
   auto xroot = _root();
   auto yroot = y->_root();
-  auto xrank = xroot->_height();
-  auto yrank = yroot->_height();
+  auto xrank = xroot->_height;
+  auto yrank = yroot->_height;
 
   if(xrank < yrank) {
-    xroot->_parent(yroot);
+    xroot->_parent = yroot;
   }
   else if(xrank > yrank) {
-    yroot->_parent(xroot);
+    yroot->_parent = xroot;
   }
   else {
-    yroot->_parent(xroot);
-    xroot->_height(xrank + 1);
+    yroot->_parent = xroot;
+    xroot->_height = xrank + 1;
   }
 }
 

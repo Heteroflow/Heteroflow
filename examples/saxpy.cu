@@ -12,8 +12,58 @@ __global__ void saxpy(int n, float a, float *x, float *y) {
   }
 }
 
+__global__ void kernel(
+ int* a1,
+ int* a2,
+ int* a3,
+ int* a4,
+ int* a5,
+ int* a6,
+ int* a7,
+ int* a8,
+ int* a9,
+ int* a10,
+ int* a11
+) {
+}
+
 // Function: main
 int main(void) {
+
+  /*std::vector<int> x(10, 1);
+
+  hf::Executor executor;
+  hf::Heteroflow hf;
+
+  auto h1 = hf.host([](){});
+  auto h2 = hf.host([](){});
+  auto h3 = hf.host([](){});
+  auto h4 = hf.host([](){});
+  auto p1 = hf.pull(x);
+  auto p2 = hf.pull(x);
+  auto p3 = hf.pull(x);
+  auto p4 = hf.pull(x);
+  auto p5 = hf.pull(x);
+  auto p6 = hf.pull(x);
+  auto p7 = hf.pull(x);
+  auto p8 = hf.pull(x);
+  auto p9 = hf.pull(x);
+  auto p10 = hf.pull(x);
+  auto p11 = hf.pull(x);
+  auto k = hf.kernel(kernel, p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11);
+  auto s = hf.push(p1, x);
+
+  k.precede(s)
+   .succeed(p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11);
+
+  h1.precede(p1);
+  h2.precede(p2);
+  h3.precede(p3);
+  h4.precede(p4);
+
+  hf.dump(std::cout);
+
+  executor.run(hf).wait(); */
 
   const int N = 1<<20;
   
