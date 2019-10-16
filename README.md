@@ -58,7 +58,7 @@ int main(void) {
 
 The saxpy task dependency graph is shown in the following figure:
 
-<img src="images/saxpy.png" width="70%">
+<img src="images/saxpy.png" width="65%">
 
 
 Compile and run the code with the following commands:
