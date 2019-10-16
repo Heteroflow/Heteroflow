@@ -384,7 +384,7 @@ void PullTask::_invoke_pull(
   // pull handle
   auto& h = _node->_pull_handle();
 
-  //std::cout << "pull " << h_data << ' ' << h_size << std::endl;
+  std::cout << "pull " << h_data << ' ' << h_size << std::endl;
 
   // allocate the global memory
   if(h.d_data == nullptr) {

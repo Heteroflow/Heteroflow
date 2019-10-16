@@ -1,7 +1,7 @@
 # Heteroflow <img align="right" width="10%" src="images/heteroflow-logo.png">
 
 A header-only C++ library to help you quickly write
-concurrent CPU-GPU programs
+concurrent CPU-GPU programs using task models
 
 :exclamation: This is a working repository with many things under construction,
 but with enough information to highlight the spirit of Heteroflow.
@@ -158,9 +158,8 @@ k2.grid(N/256, 1, 1).block(256, 1, 1);          // configure the x-y-z dimension
 
 Heteroflow gives users full privileges to leverage their domain-specific knowledge
 to write a high-performance [CUDA][cuda-zone] kernel. 
-This is an important difference between Heteroflow and existing frameworks.
-Users focus on developing kernels and CPU tasks using our tasking model,
-while leaving scheduling and concurrency details to Heteroflow.
+Users focus on developing kernels and CPU tasks using native CUDA toolkits,
+while leaving task parallelism to Heteroflow.
 
 ## Step 2: Define Task Dependencies
 
