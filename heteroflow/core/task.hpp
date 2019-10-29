@@ -91,7 +91,8 @@ class TaskBase {
     */
     template <typename S>
     Derived name(S&& name);
-    
+
+
   protected:
     
     TaskBase(Node*);
@@ -336,7 +337,12 @@ class PullTask : public TaskBase<PullTask> {
     */
     template <typename... ArgsT>
     PullTask pull(ArgsT&&... args);
-    
+
+    /**
+    @brief disable copy from host to GPU
+    */
+    PullTask no_copy() { _copy = false; return *this; }
+   
   private:
     
     PullTask(Node*);
@@ -345,6 +351,9 @@ class PullTask : public TaskBase<PullTask> {
     
     template <typename T>
     void _invoke_pull(T, cuda::Allocator&, cudaStream_t);
+
+		// A flag to indicate whether to copy memory from host to GPU
+    bool _copy {true};
 };
 
 // Constructor
@@ -380,11 +389,11 @@ void PullTask::_invoke_pull(
   auto h_span = _make_span(t);
   auto h_data = h_span.data();        // can't be nullptr
   auto h_size = h_span.size_bytes();
-  
+ 
   // pull handle
   auto& h = _node->_pull_handle();
 
-  std::cout << "pull " << h_data << ' ' << h_size << std::endl;
+  //std::cout << "pull " << h_data << ' ' << h_size << std::endl;
 
   // allocate the global memory
   if(h.d_data == nullptr) {
@@ -402,13 +411,15 @@ void PullTask::_invoke_pull(
 
   //std::cout << "global memory " << h.d_data << ' ' << h.d_size << std::endl;
   
-  // transfer the memory
-  HF_CHECK_CUDA(
-    cudaMemcpyAsync(
-      h.d_data, h_data, h_size, cudaMemcpyHostToDevice, s
-    ),
-    "failed to pull memory in task ", name()
-  );
+  if(_copy) {
+    // transfer the memory
+    HF_CHECK_CUDA(
+      cudaMemcpyAsync(
+        h.d_data, h_data, h_size, cudaMemcpyHostToDevice, s
+      ),
+      "failed to pull memory in task ", name()
+    );
+  }
 }
   
 // ----------------------------------------------------------------------------
@@ -741,8 +752,18 @@ template<typename K, typename T, size_t ... I>
 void KernelTask::_invoke_kernel(
   cudaStream_t s, K f, T t, std::index_sequence<I ...>
 ) {
+	static std::atomic<int> cnt {0};
   auto& h = _node->_kernel_handle();
+	auto c = cnt.fetch_add(1);
+
   f<<<h.grid, h.block, h.shm, s>>>(_to_argument(std::get<I>(t))...);
+	
+	// Check the kernel execution status
+	cudaError_t e = cudaGetLastError();                                 
+	if(e!=cudaSuccess) { 
+		printf("Cuda failure %s:%d: '%s'\n",__FILE__,__LINE__,cudaGetErrorString(e));           
+		exit(0); 
+	}                                
 }
 
 // Procedure: _invoke_kernel

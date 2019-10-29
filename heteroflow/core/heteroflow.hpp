@@ -97,8 +97,8 @@ inline Heteroflow::~Heteroflow() {
       //assert(h.height == 0);
       //assert(h.parent == nullptr);
     }
-    assert(n->_height == 0);
-    assert(n->_parent == n.get());
+    //assert(n->_height == 0);
+    //assert(n->_parent == n.get());
   }
 }
 

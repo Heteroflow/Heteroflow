@@ -56,6 +56,10 @@ class Node {
     size_t       shm        {0};
     std::vector<Node*> sources;
   };
+
+  struct DeviceGroup {
+    std::atomic<int> device_id {-1};
+  };
   
   public:
 
@@ -66,6 +70,7 @@ class Node {
     bool is_push() const;
     bool is_pull() const;
     bool is_kernel() const;
+		bool is_device() const;
 
     void dump(std::ostream&) const;
 
@@ -90,18 +95,24 @@ class Node {
     
     std::atomic<int> _num_dependents {0};
 
-    Node* _parent {this};
-    int   _height {0};
+    //Node* _parent {this};
+    //int   _height {0};
+
+		// Kernels in a group will be deployed on the same device
+    DeviceGroup* _group {nullptr};
+		// Kernels call this function to determine the GPU for execution
+    int _set_gpu_device(unsigned, std::atomic<int>&);
+
     
     Topology* _topology {nullptr};
 
-    Node* _root();
+    //Node* _root();
     //Node* _parent() const;
     
     void _device(int);
     //void _height(int);
     //void _parent(Node*);
-    void _union(Node*);
+    //void _union(Node*);
     void _precede(Node*);
 
     //int _height() const;
@@ -228,6 +239,11 @@ inline bool Node::is_kernel() const {
   return _handle.index() == KERNEL_IDX;
 }
 
+// Function: is_device
+inline bool Node::is_device() const {
+  return (is_push() || is_pull() || is_kernel());
+}
+
 /*// Function: _height
 inline int Node::_height() const {
 
@@ -309,39 +325,39 @@ inline int Node::_device() const {
   return nstd::visit(visitor{}, _handle);
 }
 
-// Function: _root
-inline Node* Node::_root() {
-  auto ptr = this;
-  while(ptr != _parent) {
-    _parent = _parent->_parent; 
-    ptr = _parent;
-  }
-  return ptr;
-}
+//// Function: _root
+//inline Node* Node::_root() {
+//  auto ptr = this;
+//  while(ptr != _parent) {
+//    _parent = _parent->_parent; 
+//    ptr = _parent;
+//  }
+//  return ptr;
+//}
 
-// Procedure: _union
-inline void Node::_union(Node* y) {
-
-  if(_parent == y->_parent) {
-    return;
-  }
-
-  auto xroot = _root();
-  auto yroot = y->_root();
-  auto xrank = xroot->_height;
-  auto yrank = yroot->_height;
-
-  if(xrank < yrank) {
-    xroot->_parent = yroot;
-  }
-  else if(xrank > yrank) {
-    yroot->_parent = xroot;
-  }
-  else {
-    yroot->_parent = xroot;
-    xroot->_height = xrank + 1;
-  }
-}
+//// Procedure: _union
+//inline void Node::_union(Node* y) {
+//
+//  if(_parent == y->_parent) {
+//    return;
+//  }
+//
+//  auto xroot = _root();
+//  auto yroot = y->_root();
+//  auto xrank = xroot->_height;
+//  auto yrank = yroot->_height;
+//
+//  if(xrank < yrank) {
+//    xroot->_parent = yroot;
+//  }
+//  else if(xrank > yrank) {
+//    yroot->_parent = xroot;
+//  }
+//  else {
+//    yroot->_parent = xroot;
+//    xroot->_height = xrank + 1;
+//  }
+//}
 
 // Function: dump
 inline void Node::dump(std::ostream& os) const {
@@ -380,6 +396,17 @@ inline void Node::dump(std::ostream& os) const {
   for(const auto s : _successors) {
     os << 'p' << this << " -> " << 'p' << s << ";\n";
   }
+}
+
+// Procedure: _set_gpu_device
+inline int Node::_set_gpu_device(unsigned me, std::atomic<int>& gpu_id) {
+  auto d = gpu_id.load(std::memory_order_relaxed); 
+  if(d == -1) {
+    if(gpu_id.compare_exchange_strong(d, me, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+      return me;
+    }
+  }
+  return d;
 }
 
 

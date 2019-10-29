@@ -25,6 +25,8 @@ class Executor {
   struct Worker {
     std::mt19937 rdgen { std::random_device{}() };
     WorkStealingQueue<Node*> queue;
+    WorkStealingQueue<Node*> gpu_queue;
+
     Node* cache {nullptr};
     std::vector<cudaStream_t> streams;
     std::vector<cudaEvent_t> events;
@@ -33,6 +35,7 @@ class Executor {
   struct PerThread {
     Executor* pool {nullptr}; 
     int worker_id  {-1};
+    bool gpu_thread {false};
   };
   
   struct Device {
@@ -142,38 +145,51 @@ class Executor {
     std::mutex _topology_mutex;
     std::mutex _queue_mutex;
 
-    unsigned _num_topologies {0};
+    //unsigned _num_topologies {0};
+		std::atomic<unsigned> _num_topologies {0};
     
     // scheduler field
     std::vector<Worker> _workers;
     std::vector<Notifier::Waiter> _waiters;
     std::vector<std::thread> _threads;
+
+    std::vector<Worker> _gpu_workers;
+    std::vector<Notifier::Waiter> _gpu_waiters;
+    std::vector<std::thread> _gpu_threads;
+
     std::vector<Device> _devices;
 
     WorkStealingQueue<Node*> _queue;
+    WorkStealingQueue<Node*> _gpu_queue;
 
-    std::atomic<size_t> _num_actives {0};
+    //std::atomic<size_t> _num_actives {0};
     std::atomic<size_t> _num_thieves {0};
+    std::atomic<size_t> _num_gpu_thieves {0};
     std::atomic<bool>   _done        {0};
 
     Notifier _notifier;
+    Notifier _gpu_notifier;
     
     PerThread& _per_thread() const;
 
     bool _wait_for_task(unsigned me, nstd::optional<Node*>&);
+    bool _wait_for_gpu_task(unsigned me, nstd::optional<Node*>&);
+    void _exploit_gpu_task(unsigned, nstd::optional<Node*>&);
+    void _explore_gpu_task(unsigned, nstd::optional<Node*>&);
 
     void _spawn();
+
     void _create_streams(unsigned);
     void _remove_streams(unsigned);
     void _exploit_task(unsigned, nstd::optional<Node*>&);
     void _explore_task(unsigned, nstd::optional<Node*>&);
     void _schedule(Node*, bool);
     void _schedule(std::vector<Node*>&);
-    void _invoke(unsigned, Node*);
+    void _invoke(unsigned, bool, Node*);
     void _invoke_host(unsigned, Node::Host&);
-    void _invoke_push(unsigned, Node::Push&);
-    void _invoke_pull(unsigned, Node::Pull&);
-    void _invoke_kernel(unsigned, Node::Kernel&);
+    void _invoke_push(unsigned, Node::Push&, int);
+    void _invoke_pull(unsigned, Node::Pull&, int);
+    void _invoke_kernel(unsigned, Node::Kernel&, int);
     void _increment_topology();
     void _decrement_topology();
     void _decrement_topology_and_notify();
@@ -184,6 +200,9 @@ class Executor {
     void _push_epilogue(Node::Push&);
     void _pull_epilogue(Node::Pull&);
     void _kernel_epilogue(Node::Kernel&);
+
+    void _set_devicegroup(Graph&);
+    void _reset_devicegroup(Graph&);
 };
 
 // ----------------------------------------------------------------------------
@@ -202,7 +221,10 @@ class Executor {
 inline Executor::Executor(unsigned N, unsigned M) : 
   _workers  {N},
   _waiters  {N},
-  _notifier {_waiters} {
+  _notifier {_waiters},
+  _gpu_workers  {M},
+  _gpu_waiters  {M},
+  _gpu_notifier {_gpu_waiters} {
 
   // invalid number
   auto num_devices = cuda::num_devices();
@@ -210,6 +232,12 @@ inline Executor::Executor(unsigned N, unsigned M) :
 
   // set up the devices
   _devices.resize(M);
+
+	// Must create the stream before spawning workers
+  for(unsigned i=0; i<_gpu_workers.size(); ++i) {
+    // create gpu streams
+    _create_streams(i);
+	}
 
   // set up the workers
   _spawn();
@@ -224,10 +252,20 @@ inline Executor::~Executor() {
   // shut down the scheduler
   _done = true;
   _notifier.notify(true);
+  _gpu_notifier.notify(true);
   
   for(auto& t : _threads){
     t.join();
   } 
+
+  for(auto& t : _gpu_threads){
+    t.join();
+  }
+
+  // Remove gpu streams after all GPU workers join
+  for(unsigned i=0; i<_gpu_workers.size(); ++i) {
+    _remove_streams(i);
+	}
 }
 
 // Function: num_workers
@@ -249,14 +287,14 @@ inline Executor::PerThread& Executor::_per_thread() const {
 // Procedure: _create_streams
 inline void Executor::_create_streams(unsigned i) {      
 
-  auto& w = _workers[i];
+  auto& w = _gpu_workers[i];
 
   // per-thread gpu storage
   w.streams.resize(_devices.size());
   w.events .resize(_devices.size());
 
   for(unsigned d=0; d<_devices.size(); ++d) {
-    HF_WITH_CUDA_CTX(d) {
+    HF_WITH_CUDA_CTX(i) {
       HF_CHECK_CUDA(cudaStreamCreate(&w.streams[d]), 
         "failed to create stream ", i, " on device ", d
       );
@@ -270,10 +308,10 @@ inline void Executor::_create_streams(unsigned i) {
 // Procedure: _remove_streams
 inline void Executor::_remove_streams(unsigned i) {
 
-  auto& w = _workers[i];
+  auto& w = _gpu_workers[i];
 
   for(unsigned d=0; d<_devices.size(); ++d) {
-    HF_WITH_CUDA_CTX(d) {
+    HF_WITH_CUDA_CTX(i) {
       HF_CHECK_CUDA(cudaStreamSynchronize(w.streams[d]), 
         "failed to sync stream ", i, " on device ", d
       );
@@ -298,9 +336,6 @@ inline void Executor::_spawn() {
       pt.pool = this;
       pt.worker_id = i;
       
-      // create gpu streams
-      _create_streams(i);
-     
       nstd::optional<Node*> t;
       
       // must use 1 as condition instead of !done
@@ -315,9 +350,31 @@ inline void Executor::_spawn() {
         }
       }
       
-      // clear gpu storages
-      _remove_streams(i);
+    }, i);     
+  }
+
+  for(unsigned i=0; i<_gpu_workers.size(); ++i) {
+    _gpu_threads.emplace_back([this] (unsigned i) -> void {
+
+      // per-thread storage
+      PerThread& pt = _per_thread();  
+      pt.pool = this;
+      pt.worker_id = i;
+      pt.gpu_thread = true;
+          
+      nstd::optional<Node*> t;
       
+      // must use 1 as condition instead of !done
+      while(1) {
+        
+        // execute the tasks.
+        _exploit_gpu_task(i, t);
+
+        // wait for tasks
+        if(_wait_for_gpu_task(i, t) == false) {
+          break;
+        }
+      }    
     }, i);     
   }
 }
@@ -329,12 +386,13 @@ inline void Executor::_exploit_task(unsigned i, nstd::optional<Node*>& t) {
 
   if(t) {
     auto& worker = _workers[i];
-    if(_num_actives.fetch_add(1) == 0 && _num_thieves == 0) {
+    //if(_num_actives.fetch_add(1) == 0 && _num_thieves == 0) {
+    if(_num_thieves == 0) {
       _notifier.notify(false);
     }
     do {
 
-      _invoke(i, *t);
+      _invoke(i, false, *t);
 
       if(worker.cache) {
         t = worker.cache;
@@ -346,7 +404,6 @@ inline void Executor::_exploit_task(unsigned i, nstd::optional<Node*>& t) {
 
     } while(t);
 
-    --_num_actives;
   }
 }
 
@@ -356,9 +413,9 @@ inline void Executor::_explore_task(unsigned thief, nstd::optional<Node*>& t) {
   assert(!t);
 
   const unsigned l = 0;
-  const unsigned r = _workers.size() - 1;
+  const unsigned r = _workers.size() + _gpu_workers.size() - 1;
 
-  const size_t F = (_workers.size() + 1) << 1;
+  const size_t F = (_workers.size() + _gpu_workers.size() + 1) << 1;
   const size_t Y = 100;
 
   size_t f = 0;
@@ -371,7 +428,13 @@ inline void Executor::_explore_task(unsigned thief, nstd::optional<Node*>& t) {
       _workers[thief].rdgen
     );
       
-    t = (vtm == thief) ? _queue.steal() : _workers[vtm].queue.steal();
+    // Steal cpu workers
+    if(vtm < _workers.size()) {
+      t = (vtm == thief) ? _queue.steal() : _workers[vtm].queue.steal();
+    }
+    else {
+      t = _gpu_workers[vtm - _workers.size()].queue.steal(); 
+    }
 
     if(t) {
       break;
@@ -428,15 +491,16 @@ inline bool Executor::_wait_for_task(unsigned me, nstd::optional<Node*>& t) {
   if(_done) {
     _notifier.cancel_wait(&_waiters[me]);
     _notifier.notify(true);
+    _gpu_notifier.notify(true);
     --_num_thieves;
     return false;
   }
 
-  if(_num_thieves.fetch_sub(1) == 1 && _num_actives) {
+  if(_num_thieves.fetch_sub(1) == 1 && _num_topologies) {
     _notifier.cancel_wait(&_waiters[me]);
     goto wait_for_task;
   }
-    
+   
   // Now I really need to relinguish my self to others
   _notifier.commit_wait(&_waiters[me]);
 
@@ -448,12 +512,15 @@ inline void Executor::_invoke_host(unsigned me, Node::Host& h) {
   h.work();
 }
 
-// Procedure: _invoke_push
-inline void Executor::_invoke_push(unsigned me, Node::Push& h) {
 
-  auto d = h.source->_pull_handle().device;
-  auto s = _workers[me].streams[d];
-  auto e = _workers[me].events[d];
+
+// Procedure: _invoke_push
+inline void Executor::_invoke_push(unsigned me, Node::Push& h, int d) {
+  //auto d = h.source->_pull_handle().device;
+  //auto s = _gpu_workers[me].streams[d];
+  //auto e = _gpu_workers[me].events[d];
+  auto s = _gpu_workers[d].streams[me];
+  auto e = _gpu_workers[d].events[me];
 
   HF_WITH_CUDA_CTX(d) {
     HF_CHECK_CUDA(cudaEventRecord(e, s),
@@ -467,11 +534,12 @@ inline void Executor::_invoke_push(unsigned me, Node::Push& h) {
 }
 
 // Procedure: _invoke_pull
-inline void Executor::_invoke_pull(unsigned me, Node::Pull& h) {
-
-  auto d = h.device;
-  auto s = _workers[me].streams[d];
-  auto e = _workers[me].events[d];
+inline void Executor::_invoke_pull(unsigned me, Node::Pull& h, int d) {
+  //auto d = h.device;
+  //auto s = _gpu_workers[me].streams[d];
+  //auto e = _gpu_workers[me].events[d];
+  auto s = _gpu_workers[d].streams[me];
+  auto e = _gpu_workers[d].events[me];
 
   HF_WITH_CUDA_CTX(d) {
     HF_CHECK_CUDA(cudaEventRecord(e, s),
@@ -485,17 +553,19 @@ inline void Executor::_invoke_pull(unsigned me, Node::Pull& h) {
 }
 
 // Procedure: _invoke_kernel
-inline void Executor::_invoke_kernel(unsigned me, Node::Kernel& h) {
-
-  auto d = h.device;
-  auto s = _workers[me].streams[d];
-  auto e = _workers[me].events[d];
+inline void Executor::_invoke_kernel(unsigned me, Node::Kernel& h, int d) {
+  //auto d = h.device;
+  //auto s = _gpu_workers[me].streams[d];
+  //auto e = _gpu_workers[me].events[d];
+  auto s = _gpu_workers[d].streams[me];
+  auto e = _gpu_workers[d].events[me];
 
   HF_WITH_CUDA_CTX(d) {
     HF_CHECK_CUDA(cudaEventRecord(e, s),
       "failed to record event ", me, " on device ", d
     );
-    h.work(_workers[me].streams[d]);
+    //h.work(_gpu_workers[me].streams[d]);
+    h.work(_gpu_workers[d].streams[me]);
     HF_CHECK_CUDA(cudaStreamWaitEvent(s, e, 0),
       "failed to sync event ", me, " on device ", d
     );
@@ -503,7 +573,7 @@ inline void Executor::_invoke_kernel(unsigned me, Node::Kernel& h) {
 }
  
 // Procedure: _invoke
-inline void Executor::_invoke(unsigned me, Node* node) {
+inline void Executor::_invoke(unsigned me, bool gpu_thread, Node* node) {
 
   // Here we need to fetch the num_successors first to avoid the invalid memory
   // access caused by topology removal.
@@ -513,13 +583,25 @@ inline void Executor::_invoke(unsigned me, Node* node) {
   struct visitor {
     Executor& e;
     unsigned me;
+    Node *node;
     void operator () (Node::Host& h)   { e._invoke_host(me, h);   }
-    void operator () (Node::Push& h)   { e._invoke_push(me, h);   }
-    void operator () (Node::Pull& h)   { e._invoke_pull(me, h);   }
-    void operator () (Node::Kernel& h) { e._invoke_kernel(me, h); }
+    void operator () (Node::Push& h)   { 
+      auto d = node->_set_gpu_device(me, node->_group->device_id);
+      e._invoke_push(me, h, d);
+    }
+    void operator () (Node::Pull& h)   { 
+      auto d = node->_set_gpu_device(me, node->_group->device_id);
+			h.device = d;
+      e._invoke_pull(me, h, d);   
+    }
+    void operator () (Node::Kernel& h) { 
+      auto d = node->_set_gpu_device(me, node->_group->device_id);
+			h.device = d;
+      e._invoke_kernel(me, h, d); 
+    }
   };
   
-  nstd::visit(visitor{*this, me}, node->_handle);
+  nstd::visit(visitor{*this, me, node}, node->_handle);
   
   // recover the runtime data  
   node->_num_dependents = static_cast<int>(node->_dependents.size());
@@ -531,8 +613,17 @@ inline void Executor::_invoke(unsigned me, Node* node) {
     if(--(node->_successors[i]->_num_dependents) == 0) {
       if(cache) {
         _schedule(cache, false);
+				cache = node->_successors[i];
       }
-      cache = node->_successors[i];
+      else {
+        if((node->_successors[i]->is_host() && !gpu_thread) || 
+           (!node->_successors[i]->is_host() && gpu_thread) ) {
+          cache = node->_successors[i];
+        }
+        else {
+          _schedule(node->_successors[i], false);
+        }
+      }
     }
   }
 
@@ -559,12 +650,18 @@ inline void Executor::_schedule(Node* node, bool bypass) {
   auto& pt = _per_thread();
 
   if(pt.pool == this) {
+    auto &w = pt.gpu_thread ? _gpu_workers[pt.worker_id] : _workers[pt.worker_id];
     if(!bypass) {
-      _workers[pt.worker_id].queue.push(node);
+      if(node->is_host()) {
+        w.queue.push(node);
+      }
+      else {
+        w.gpu_queue.push(node);
+      }
     }
     else {
-      assert(!_workers[pt.worker_id].cache);
-      _workers[pt.worker_id].cache = node;
+      assert(!w.cache);
+      w.cache = node;
     }
     return;
   }
@@ -572,10 +669,20 @@ inline void Executor::_schedule(Node* node, bool bypass) {
   // other threads
   {
     std::lock_guard<std::mutex> lock(_queue_mutex);
-    _queue.push(node);
+    if(node->is_host()) {
+      _queue.push(node);
+    } 
+    else {
+      _gpu_queue.push(node);
+    }
   }
 
-  _notifier.notify(false);
+  if(node->is_host()) {
+    _notifier.notify(false);
+  }
+  else {
+    _gpu_notifier.notify(false);
+  }
 }
 
 // Procedure: _schedule
@@ -597,26 +704,49 @@ inline void Executor::_schedule(std::vector<Node*>& nodes) {
   auto& pt = _per_thread();
 
   if(pt.pool == this) {
+    auto &w = pt.gpu_thread ? _gpu_workers[pt.worker_id] : _workers[pt.worker_id];
     for(size_t i=0; i<num_nodes; ++i) {
-      _workers[pt.worker_id].queue.push(nodes[i]);
+      if(nodes[i]->is_host()) {
+        w.queue.push(nodes[i]);
+      }
+      else {
+        w.gpu_queue.push(nodes[i]);
+      }
     }
     return;
   }
   
+	size_t num_gpu_tasks {0};
+	size_t num_cpu_tasks {0};
   // other threads
   {
     std::lock_guard<std::mutex> lock(_queue_mutex);
     for(size_t k=0; k<num_nodes; ++k) {
-      _queue.push(nodes[k]);
+      if(nodes[k]->is_host()) {
+        _queue.push(nodes[k]);
+        num_cpu_tasks ++;
+      }
+      else {
+        _gpu_queue.push(nodes[k]);
+        num_gpu_tasks ++;
+      }
     }
   }
 
-  if(num_nodes >= _workers.size()) {
+  if(num_cpu_tasks >= _workers.size()) {
     _notifier.notify(true);
+	}	
+	else {
+	  for(size_t i=0; i<num_cpu_tasks; i++) {
+		  _notifier.notify(false);
+		}
+	}
+	if(num_gpu_tasks >= _gpu_workers.size()) {
+    _gpu_notifier.notify(true);
   }
   else {
-    for(size_t k=0; k<num_nodes; ++k) {
-      _notifier.notify(false);
+    for(size_t k=0; k<num_gpu_tasks; ++k) {
+      _gpu_notifier.notify(false);
     }
   }
 }
@@ -631,6 +761,14 @@ inline void Executor::_tear_down_topology(Topology* tpg) {
   // case 1: we still need to run the topology again
   if(!tpg->_pred()) {
     tpg->_num_sinks = tpg->_cached_num_sinks;
+
+		// Reset the device group
+		for(auto &n: tpg->_heteroflow._graph) {
+			if(n->is_device()) {
+				assert(n->_group != nullptr);
+				n->_group->device_id = -1;
+			}
+		}
     _schedule(tpg->_sources); 
   }
   // case 2: the final run of this topology
@@ -806,6 +944,71 @@ std::future<void> Executor::run_until(Heteroflow& f, P&& pred, C&& c) {
   return future;
 }
 
+
+// Procedure: _set_devicegroup
+inline void Executor::_set_devicegroup(Graph& graph) {
+
+  // Find the connected kernel and set them to the same group
+	for(auto& node : graph) {
+		if(node->is_device() && node->_group == nullptr) {
+			node->_group = new Node::DeviceGroup();
+			const auto ptr = node->_group;
+			std::vector<Node*> reachable {node.get()};
+      while(!reachable.empty()) {
+				auto n = reachable.back();
+				reachable.pop_back();
+				// Check successors
+				for(auto &s: n->_successors) {
+					if(s->is_device() && s->_group == nullptr) {
+						reachable.emplace_back(s);
+						s->_group = ptr;
+					}
+				}
+        // Check depedents
+				for(auto &d: n->_dependents) {
+					if(d->is_device() && d->_group == nullptr) {
+						reachable.emplace_back(d);
+						d->_group = ptr;
+					}
+				}
+			} // End of while-loop
+		}   // End of if
+	}     // End of for-loop
+}
+
+// Procedure: _reset_devicegroup
+inline void Executor::_reset_devicegroup(Graph &graph) {
+
+	// Reset the group of kernels
+	for(auto& node : graph) {
+		if(node->is_device() && node->_group != nullptr) {
+			const auto ptr = node->_group;
+			std::vector<Node*> reachable {node.get()};
+			node->_group = nullptr;
+      while(!reachable.empty()) {
+				auto n = reachable.back();
+				reachable.pop_back();
+				// Check successors
+				for(auto &s: n->_successors) {
+					if(s->is_device() && s->_group == ptr) {
+						reachable.emplace_back(s);
+						s->_group = nullptr;
+					}
+				}
+        // Check depedents
+				for(auto &d: n->_dependents) {
+					if(d->is_device() && d->_group == ptr) {
+						reachable.emplace_back(d);
+						d->_group = nullptr;
+					}
+				}
+			} // End of while-loop
+			free(ptr);
+		}   // End of if
+	}     // End of for-loop
+}
+
+
 // Procedure: _run_prologue
 inline void Executor::_run_prologue(Topology* tpg) {
   
@@ -827,41 +1030,53 @@ inline void Executor::_run_prologue(Topology* tpg) {
       tpg->_num_sinks++;
     }
     
-    if(node->is_kernel()) {
-      auto& h = node->_kernel_handle();
-      assert(h.device == -1);
-      for(auto s : h.sources) {
-        node->_union(s);
-      }
-    }
+    //if(node->is_kernel()) {
+    //  auto& h = node->_kernel_handle();
+    //  assert(h.device == -1);
+    //  for(auto s : h.sources) {
+    //    node->_union(s);
+    //  }
+    //}
   }
+
+  //for(auto& node : graph) {
+  //  if(node->is_push()) {
+  //    for(auto d: node->_dependents) {
+  //      if(d->is_kernel() || d->is_pull()) {
+  //         node->_parent = d->_parent;
+  //         break;
+  //      }
+  //    }
+  //  }
+  //}
 
   tpg->_cached_num_sinks = tpg->_num_sinks;
+
+	_set_devicegroup(graph);
   
   // gpu device assignment
-  int cursor = 0;
-
-  for(auto& node : graph) {
-    if(node->is_kernel() || node->is_pull()) {
-      assert(_devices.size() != 0);
-      auto r = node->_root();
-      auto d = r->_device();
-      
-      // need to assign a new gpu
-      if(d == -1) {
-        d = cursor++;
-        if(cursor == _devices.size()) {
-          cursor = 0;
-        }
-        r->_device(d);
-      }
-      node->_device(d);
-      
-      //std::cout << node->_name << " grouped to "
-      //          << node->_root()->_name << " with device "
-      //          << d << std::endl;
-    }
-  }
+  //int cursor = 0;
+  //for(auto& node : graph) {
+  //  if(node->is_kernel() || node->is_pull()) {
+  //    assert(_devices.size() != 0);
+  //    auto r = node->_root();
+  //    auto d = r->_device();
+  //    
+  //    // need to assign a new gpu
+  //    if(d == -1) {
+  //      d = cursor++;
+  //      if(cursor == _devices.size()) {
+  //        cursor = 0;
+  //      }
+  //      r->_device(d);
+  //    }
+  //    node->_device(d);
+  //    
+  //    //std::cout << node->_name << " grouped to "
+  //    //          << node->_root()->_name << " with device "
+  //    //          << d << std::endl;
+  //  }
+  //}
 }
 
 // Procedure: _host_epilogue
@@ -875,7 +1090,7 @@ inline void Executor::_push_epilogue(Node::Push& h) {
 // Procedure: _pull_epilogue
 inline void Executor::_pull_epilogue(Node::Pull& h) {
   assert(h.device != -1);
-  HF_WITH_CUDA_CTX(h.device) {
+	HF_WITH_CUDA_CTX(h.device) {
     _devices[h.device].allocator.deallocate(h.d_data);
   }
   h.device = -1;
@@ -908,13 +1123,145 @@ inline void Executor::_run_epilogue(Topology* tpg) {
 
   for(auto& node : graph) {
     nstd::visit(visitor{*this}, node->_handle);
-    node->_parent = node.get();;
-    node->_height = 0;
+    //node->_parent = node.get();;
+    //node->_height = 0;
+  }
+ 	_reset_devicegroup(tpg->_heteroflow._graph);
+}
+
+
+
+
+
+// -------------------------  GPU worker routines -----------------------------
+
+// Procedure: _exploit_gpu_task
+inline void Executor::_exploit_gpu_task(unsigned i, nstd::optional<Node*>& t) {
+  
+  assert(!_gpu_workers[i].cache);
+
+  if(t) {
+    auto& worker = _gpu_workers[i];
+    if(_num_gpu_thieves == 0) {
+      _gpu_notifier.notify(false);
+    }
+    do {
+
+      _invoke(i, true, *t);
+
+      if(worker.cache) {
+        t = worker.cache;
+        worker.cache = nullptr;
+      }
+      else {
+        t = worker.gpu_queue.pop();
+      }
+
+    } while(t);
+
   }
 }
 
+
+// Function: _wait_for_gpu_task
+inline bool Executor::_wait_for_gpu_task(unsigned me, nstd::optional<Node*>& t) {
+
+  wait_for_task:
+
+  assert(!t);
+
+  ++_num_gpu_thieves;
+
+  explore_task:
+
+  _explore_gpu_task(me, t);
+
+  if(t) {
+    if(_num_gpu_thieves.fetch_sub(1) == 1) {
+      _gpu_notifier.notify(false);
+    }
+    return true;
+  }
+
+  _gpu_notifier.prepare_wait(&_gpu_waiters[me]);
+  
+  if(!_gpu_queue.empty()) {
+    _gpu_notifier.cancel_wait(&_gpu_waiters[me]);
+    t = _gpu_queue.steal();
+    if(t) {
+      if(_num_gpu_thieves.fetch_sub(1) == 1) {
+        _gpu_notifier.notify(false);
+      }
+      return true;
+    }
+    else {
+      goto explore_task;
+    }
+  }
+
+  if(_done) {
+    _gpu_notifier.cancel_wait(&_gpu_waiters[me]);
+    _gpu_notifier.notify(true);
+    _notifier.notify(true);
+    --_num_gpu_thieves;
+    return false;
+  }
+
+  if(_num_gpu_thieves.fetch_sub(1) == 1 && _num_topologies) {
+    _gpu_notifier.cancel_wait(&_gpu_waiters[me]);
+    goto wait_for_task;
+  }
+    
+  // Now I really need to relinguish my self to others
+  _gpu_notifier.commit_wait(&_gpu_waiters[me]);
+
+  return true;
+}
+
+// Function: _explore_gpu_task
+inline void Executor::_explore_gpu_task(unsigned thief, nstd::optional<Node*>& t) {
+  
+  assert(!t);
+
+  const unsigned l = 0;
+  const unsigned r = _workers.size() + _gpu_workers.size() - 1;
+
+  const size_t F = (_workers.size() + _gpu_workers.size() + 1) << 1;
+  const size_t Y = 100;
+
+  size_t f = 0;
+  size_t y = 0;
+
+  // explore
+  while(!_done) {
+  
+    unsigned vtm = std::uniform_int_distribution<unsigned>{l, r}(
+      _gpu_workers[thief].rdgen
+    );
+
+    // Steal cpu workers
+    if(vtm < _workers.size()) {
+      t = _workers[vtm].gpu_queue.steal(); 
+    }
+    else {
+      t = (vtm - _workers.size() == thief) ? _gpu_queue.steal() : _gpu_workers[vtm].gpu_queue.steal();
+    }
+         
+    if(t) {
+      break;
+    }
+
+    if(f++ > F) {
+      std::this_thread::yield();
+      if(y++ > Y) {
+        break;
+      }
+    }
+  }
+
+}
+
+
 }  // end of namespace hf -----------------------------------------------------
-
-
 
 
