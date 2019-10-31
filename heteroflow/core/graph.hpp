@@ -100,9 +100,6 @@ class Node {
 
 		// Kernels in a group will be deployed on the same device
     DeviceGroup* _group {nullptr};
-		// Kernels call this function to determine the GPU for execution
-    int _assign_gpu(std::atomic<int>&, std::atomic<int> *, const size_t);
-
     
     Topology* _topology {nullptr};
 
@@ -397,30 +394,6 @@ inline void Node::dump(std::ostream& os) const {
     os << 'p' << this << " -> " << 'p' << s << ";\n";
   }
 }
-
-// Procedure: _assign_gpu
-inline int Node::_assign_gpu(std::atomic<int>& gpu_id, std::atomic<int>* tasks_per_gpu, const size_t num_gpus) {
-  auto id = gpu_id.load(std::memory_order_relaxed); 
-  if(id == -1) {
-    unsigned min_load_gpu = 0;
-    int min_load = tasks_per_gpu[0].load(std::memory_order_relaxed);
-    for(unsigned i=1; i<num_gpus; i++) {
-			auto load = tasks_per_gpu[i].load(std::memory_order_relaxed);
-      if(load < min_load) {
-        min_load = load;
-        min_load_gpu = i;
-      }   
-    }   
-
-    if(gpu_id.compare_exchange_strong(id, min_load_gpu, std::memory_order_seq_cst, std::memory_order_relaxed)) {
-			tasks_per_gpu[min_load_gpu].fetch_add(1, std::memory_order_relaxed);
-      return min_load_gpu;
-    }
-  }
-	tasks_per_gpu[id].fetch_add(1, std::memory_order_relaxed);
-  return id;
-}
-
 
 
 //// Function: _root

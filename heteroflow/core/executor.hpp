@@ -203,6 +203,8 @@ class Executor {
     void _pull_epilogue(Node::Pull&);
     void _kernel_epilogue(Node::Kernel&);
 
+		// Kernels call this function to determine the GPU for execution
+    int _assign_gpu(std::atomic<int>&);
 };
 
 // ----------------------------------------------------------------------------
@@ -577,6 +579,37 @@ inline void Executor::_invoke_kernel(unsigned me, Node::Kernel& h, int d) {
     );
   }
 }
+
+
+// Procedure: _assign_gpu
+inline int Executor::_assign_gpu(std::atomic<int>& gpu_id) {
+  auto id = gpu_id.load(std::memory_order_relaxed); 
+  if(id == -1) {
+    unsigned min_load_gpu = 0;
+    int min_load = _tasks_per_gpu[0].load(std::memory_order_relaxed);
+		//if(min_load == 0) {
+    //  if(tasks_per_gpu[0].compare_exchange_strong(min_load, 1, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+		//		printf("Get 1\n");
+		//		return 0;
+		//	}
+		//}
+    for(unsigned i=1; i<_gpu_workers.size(); i++) {
+			auto load = _tasks_per_gpu[i].load(std::memory_order_relaxed);
+      if(load < min_load) {
+        min_load = load;
+        min_load_gpu = i;
+      }   
+    }   
+
+    if(gpu_id.compare_exchange_strong(id, min_load_gpu, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+			_tasks_per_gpu[min_load_gpu].fetch_add(1, std::memory_order_relaxed);
+      return min_load_gpu;
+    }
+  }
+	_tasks_per_gpu[id].fetch_add(1, std::memory_order_relaxed);
+  return id;
+}
+
  
 // Procedure: _invoke
 inline void Executor::_invoke(unsigned me, bool gpu_thread, Node* node) {
@@ -593,18 +626,18 @@ inline void Executor::_invoke(unsigned me, bool gpu_thread, Node* node) {
 
     void operator () (Node::Host& h)   { e._invoke_host(me, h);   }
     void operator () (Node::Push& h)   { 
-      auto d = node->_assign_gpu(node->_group->device_id, e._tasks_per_gpu.get(), e.num_devices());
+      auto d = e._assign_gpu(node->_group->device_id);
       e._invoke_push(me, h, d);
 			e._tasks_per_gpu[d].fetch_sub(1, std::memory_order_relaxed);
     }
     void operator () (Node::Pull& h)   { 
-      auto d = node->_assign_gpu(node->_group->device_id, e._tasks_per_gpu.get(), e.num_devices());
+      auto d = e._assign_gpu(node->_group->device_id);
 			h.device = d;
       e._invoke_pull(me, h, d);   
 			e._tasks_per_gpu[d].fetch_sub(1, std::memory_order_relaxed);
     }
     void operator () (Node::Kernel& h) { 
-      auto d = node->_assign_gpu(node->_group->device_id, e._tasks_per_gpu.get(), e.num_devices());
+      auto d = e._assign_gpu(node->_group->device_id);
 			h.device = d;
       e._invoke_kernel(me, h, d); 
 			e._tasks_per_gpu[d].fetch_sub(1, std::memory_order_relaxed);
