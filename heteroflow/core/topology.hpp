@@ -29,6 +29,7 @@ class Topology {
 
     std::promise<void> _promise;
     std::vector<Node*> _sources;
+
     std::atomic<int> _num_sinks {0};
 
     int _cached_num_sinks {0};

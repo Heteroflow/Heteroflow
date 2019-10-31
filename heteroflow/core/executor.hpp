@@ -167,6 +167,8 @@ class Executor {
     std::atomic<size_t> _num_gpu_thieves {0};
     std::atomic<bool>   _done        {0};
 
+		std::unique_ptr<std::atomic<int> []> _tasks_per_gpu;
+
     Notifier _notifier;
     Notifier _gpu_notifier;
     
@@ -201,8 +203,6 @@ class Executor {
     void _pull_epilogue(Node::Pull&);
     void _kernel_epilogue(Node::Kernel&);
 
-    void _set_devicegroup(Graph&);
-    void _reset_devicegroup(Graph&);
 };
 
 // ----------------------------------------------------------------------------
@@ -232,6 +232,12 @@ inline Executor::Executor(unsigned N, unsigned M) :
 
   // set up the devices
   _devices.resize(M);
+
+	// Initialize task count on GPU
+	_tasks_per_gpu = std::make_unique<std::atomic<int> []> (M);
+	for(size_t i=0; i<M; i++) {
+		_tasks_per_gpu[i] = 0;
+	}
 
 	// Must create the stream before spawning workers
   for(unsigned i=0; i<_gpu_workers.size(); ++i) {
@@ -582,22 +588,26 @@ inline void Executor::_invoke(unsigned me, bool gpu_thread, Node* node) {
   // Invoke the work at the node 
   struct visitor {
     Executor& e;
-    unsigned me;
+		unsigned me;
     Node *node;
+
     void operator () (Node::Host& h)   { e._invoke_host(me, h);   }
     void operator () (Node::Push& h)   { 
-      auto d = node->_set_gpu_device(me, node->_group->device_id);
+      auto d = node->_assign_gpu(node->_group->device_id, e._tasks_per_gpu.get(), e.num_devices());
       e._invoke_push(me, h, d);
+			e._tasks_per_gpu[d].fetch_sub(1, std::memory_order_relaxed);
     }
     void operator () (Node::Pull& h)   { 
-      auto d = node->_set_gpu_device(me, node->_group->device_id);
+      auto d = node->_assign_gpu(node->_group->device_id, e._tasks_per_gpu.get(), e.num_devices());
 			h.device = d;
       e._invoke_pull(me, h, d);   
+			e._tasks_per_gpu[d].fetch_sub(1, std::memory_order_relaxed);
     }
     void operator () (Node::Kernel& h) { 
-      auto d = node->_set_gpu_device(me, node->_group->device_id);
+      auto d = node->_assign_gpu(node->_group->device_id, e._tasks_per_gpu.get(), e.num_devices());
 			h.device = d;
       e._invoke_kernel(me, h, d); 
+			e._tasks_per_gpu[d].fetch_sub(1, std::memory_order_relaxed);
     }
   };
   
@@ -945,69 +955,6 @@ std::future<void> Executor::run_until(Heteroflow& f, P&& pred, C&& c) {
 }
 
 
-// Procedure: _set_devicegroup
-inline void Executor::_set_devicegroup(Graph& graph) {
-
-  // Find the connected kernel and set them to the same group
-	for(auto& node : graph) {
-		if(node->is_device() && node->_group == nullptr) {
-			node->_group = new Node::DeviceGroup();
-			const auto ptr = node->_group;
-			std::vector<Node*> reachable {node.get()};
-      while(!reachable.empty()) {
-				auto n = reachable.back();
-				reachable.pop_back();
-				// Check successors
-				for(auto &s: n->_successors) {
-					if(s->is_device() && s->_group == nullptr) {
-						reachable.emplace_back(s);
-						s->_group = ptr;
-					}
-				}
-        // Check depedents
-				for(auto &d: n->_dependents) {
-					if(d->is_device() && d->_group == nullptr) {
-						reachable.emplace_back(d);
-						d->_group = ptr;
-					}
-				}
-			} // End of while-loop
-		}   // End of if
-	}     // End of for-loop
-}
-
-// Procedure: _reset_devicegroup
-inline void Executor::_reset_devicegroup(Graph &graph) {
-
-	// Reset the group of kernels
-	for(auto& node : graph) {
-		if(node->is_device() && node->_group != nullptr) {
-			const auto ptr = node->_group;
-			std::vector<Node*> reachable {node.get()};
-			node->_group = nullptr;
-      while(!reachable.empty()) {
-				auto n = reachable.back();
-				reachable.pop_back();
-				// Check successors
-				for(auto &s: n->_successors) {
-					if(s->is_device() && s->_group == ptr) {
-						reachable.emplace_back(s);
-						s->_group = nullptr;
-					}
-				}
-        // Check depedents
-				for(auto &d: n->_dependents) {
-					if(d->is_device() && d->_group == ptr) {
-						reachable.emplace_back(d);
-						d->_group = nullptr;
-					}
-				}
-			} // End of while-loop
-			free(ptr);
-		}   // End of if
-	}     // End of for-loop
-}
-
 
 // Procedure: _run_prologue
 inline void Executor::_run_prologue(Topology* tpg) {
@@ -1016,7 +963,12 @@ inline void Executor::_run_prologue(Topology* tpg) {
   tpg->_sources.clear();
 
   auto& graph = tpg->_heteroflow._graph;
-  
+
+	// Put these in topology struct ?
+	std::vector<Node*> pull_nodes;
+	std::vector<Node*> kernel_nodes;
+	std::vector<Node*> push_nodes;
+   
   // scan each node in the graph and build up the links
   for(auto& node : graph) {
 
@@ -1029,15 +981,56 @@ inline void Executor::_run_prologue(Topology* tpg) {
     if(node->num_successors() == 0) {
       tpg->_num_sinks++;
     }
-    
-    //if(node->is_kernel()) {
-    //  auto& h = node->_kernel_handle();
-    //  assert(h.device == -1);
-    //  for(auto s : h.sources) {
-    //    node->_union(s);
-    //  }
-    //}
+
+    if(node->is_kernel()) {
+      auto& h = node->_kernel_handle();
+      assert(h.device == -1);
+      for(auto s : h.sources) {
+        node->_union(s);
+      }
+			kernel_nodes.push_back(node.get());
+    }
+
+		if(node->is_pull()) {
+			pull_nodes.push_back(node.get());
+		}
+
+		if(node->is_push()) {
+			push_nodes.push_back(node.get());
+		}
   }
+
+	// Constructr root device group and assign kernel node's device group
+	for(auto &n: kernel_nodes) {
+    auto root = n->_root();
+		if(root->_group == nullptr) {
+			root->_group = new Node::DeviceGroup;
+		}
+		if(n->_group == nullptr) {
+			n->_group = root->_group;
+		}
+	}
+
+	// Set pull node's device group
+	for(auto &n: pull_nodes) {
+    auto root = n->_root();
+		assert(root->_group != nullptr);
+		if(n->_group == nullptr) {
+			n->_group = root->_group;
+		}
+	}
+
+	// Set push node's device group
+	for(auto &n: push_nodes) {
+		for(auto d: n->_dependents) {
+			if(d->is_kernel() || d->is_pull()) {
+				assert(d->_group != nullptr);
+				n->_parent = d->_parent;
+				n->_group = d->_group;
+        break;
+			}
+		}
+	}
 
   //for(auto& node : graph) {
   //  if(node->is_push()) {
@@ -1052,7 +1045,6 @@ inline void Executor::_run_prologue(Topology* tpg) {
 
   tpg->_cached_num_sinks = tpg->_num_sinks;
 
-	_set_devicegroup(graph);
   
   // gpu device assignment
   //int cursor = 0;
@@ -1121,12 +1113,21 @@ inline void Executor::_run_epilogue(Topology* tpg) {
 
   auto& graph = tpg->_heteroflow._graph;
 
+	// Reset device group first
+  for(auto& node : graph) {
+    auto root = node->_root();
+		if(root->_group != nullptr) {
+			delete root->_group;
+			root->_group = nullptr;
+		}
+    node->_group = nullptr;
+  }
+
   for(auto& node : graph) {
     nstd::visit(visitor{*this}, node->_handle);
-    //node->_parent = node.get();;
-    //node->_height = 0;
+    node->_parent = node.get();;
+    node->_height = 0;
   }
- 	_reset_devicegroup(tpg->_heteroflow._graph);
 }
 
 
