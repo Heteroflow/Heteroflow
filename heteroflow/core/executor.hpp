@@ -24,7 +24,7 @@ class Executor {
   
   struct Worker {
     std::mt19937 rdgen { std::random_device{}() };
-    WorkStealingQueue<Node*> queue;
+    WorkStealingQueue<Node*> cpu_queue;
     WorkStealingQueue<Node*> gpu_queue;
 
     Node* cache {nullptr};
@@ -40,6 +40,7 @@ class Executor {
   
   struct Device {
     cuda::Allocator allocator;
+		std::atomic<int> load {0};
   };
 
   public:
@@ -149,32 +150,33 @@ class Executor {
 		std::atomic<unsigned> _num_topologies {0};
     
     // scheduler field
-    std::vector<Worker> _workers;
-    std::vector<Notifier::Waiter> _waiters;
-    std::vector<std::thread> _threads;
+    std::vector<Worker> _cpu_workers;
+    std::vector<Notifier::Waiter> _cpu_waiters;
+    std::vector<std::thread> _cpu_threads;
 
     std::vector<Worker> _gpu_workers;
     std::vector<Notifier::Waiter> _gpu_waiters;
     std::vector<std::thread> _gpu_threads;
 
-    std::vector<Device> _devices;
-
-    WorkStealingQueue<Node*> _queue;
+    WorkStealingQueue<Node*> _cpu_queue;
     WorkStealingQueue<Node*> _gpu_queue;
 
     //std::atomic<size_t> _num_actives {0};
-    std::atomic<size_t> _num_thieves {0};
+    std::atomic<size_t> _num_cpu_thieves {0};
     std::atomic<size_t> _num_gpu_thieves {0};
     std::atomic<bool>   _done        {0};
 
-		std::unique_ptr<std::atomic<int> []> _tasks_per_gpu;
-
-    Notifier _notifier;
+    Notifier _cpu_notifier;
     Notifier _gpu_notifier;
+
+    std::vector<Device> _devices;
     
     PerThread& _per_thread() const;
 
-    bool _wait_for_task(unsigned me, nstd::optional<Node*>&);
+    bool _wait_for_cpu_task(unsigned me, nstd::optional<Node*>&);
+    void _exploit_cpu_task(unsigned, nstd::optional<Node*>&);
+    void _explore_cpu_task(unsigned, nstd::optional<Node*>&);
+
     bool _wait_for_gpu_task(unsigned me, nstd::optional<Node*>&);
     void _exploit_gpu_task(unsigned, nstd::optional<Node*>&);
     void _explore_gpu_task(unsigned, nstd::optional<Node*>&);
@@ -183,8 +185,6 @@ class Executor {
 
     void _create_streams(unsigned);
     void _remove_streams(unsigned);
-    void _exploit_task(unsigned, nstd::optional<Node*>&);
-    void _explore_task(unsigned, nstd::optional<Node*>&);
     void _schedule(Node*, bool);
     void _schedule(std::vector<Node*>&);
     void _invoke(unsigned, bool, Node*);
@@ -221,25 +221,17 @@ class Executor {
 
 // Constructor
 inline Executor::Executor(unsigned N, unsigned M) : 
-  _workers  {N},
-  _waiters  {N},
-  _notifier {_waiters},
+  _cpu_workers  {N},
+  _cpu_waiters  {N},
+  _cpu_notifier {_cpu_waiters},
   _gpu_workers  {M},
   _gpu_waiters  {M},
-  _gpu_notifier {_gpu_waiters} {
+  _gpu_notifier {_gpu_waiters}, 
+	_devices {M} {
 
   // invalid number
   auto num_devices = cuda::num_devices();
   HF_THROW_IF(num_devices < M, "max device count is ", num_devices);
-
-  // set up the devices
-  _devices.resize(M);
-
-	// Initialize task count on GPU
-	_tasks_per_gpu = std::make_unique<std::atomic<int> []> (M);
-	for(size_t i=0; i<M; i++) {
-		_tasks_per_gpu[i] = 0;
-	}
 
 	// Must create the stream before spawning workers
   for(unsigned i=0; i<_gpu_workers.size(); ++i) {
@@ -259,10 +251,10 @@ inline Executor::~Executor() {
   
   // shut down the scheduler
   _done = true;
-  _notifier.notify(true);
+  _cpu_notifier.notify(true);
   _gpu_notifier.notify(true);
   
-  for(auto& t : _threads){
+  for(auto& t : _cpu_threads){
     t.join();
   } 
 
@@ -278,7 +270,7 @@ inline Executor::~Executor() {
 
 // Function: num_workers
 inline size_t Executor::num_workers() const {
-  return _workers.size();
+  return _cpu_workers.size() + _gpu_workers.size();
 }
 
 // Function: num_devices
@@ -336,8 +328,8 @@ inline void Executor::_remove_streams(unsigned i) {
 // Procedure: _spawn
 inline void Executor::_spawn() {
   
-  for(unsigned i=0; i<_workers.size(); ++i) {
-    _threads.emplace_back([this] (unsigned i) -> void {
+  for(unsigned i=0; i<_cpu_workers.size(); ++i) {
+    _cpu_threads.emplace_back([this] (unsigned i) -> void {
 
       // per-thread storage
       PerThread& pt = _per_thread();  
@@ -350,10 +342,10 @@ inline void Executor::_spawn() {
       while(1) {
         
         // execute the tasks.
-        _exploit_task(i, t);
+        _exploit_cpu_task(i, t);
 
         // wait for tasks
-        if(_wait_for_task(i, t) == false) {
+        if(_wait_for_cpu_task(i, t) == false) {
           break;
         }
       }
@@ -388,15 +380,15 @@ inline void Executor::_spawn() {
 }
 
 // Procedure: _exploit_task
-inline void Executor::_exploit_task(unsigned i, nstd::optional<Node*>& t) {
+inline void Executor::_exploit_cpu_task(unsigned i, nstd::optional<Node*>& t) {
   
-  assert(!_workers[i].cache);
+  assert(!_cpu_workers[i].cache);
 
   if(t) {
-    auto& worker = _workers[i];
+    auto& worker = _cpu_workers[i];
     //if(_num_actives.fetch_add(1) == 0 && _num_thieves == 0) {
-    if(_num_thieves == 0) {
-      _notifier.notify(false);
+    if(_num_cpu_thieves == 0) {
+      _cpu_notifier.notify(false);
     }
     do {
 
@@ -407,7 +399,7 @@ inline void Executor::_exploit_task(unsigned i, nstd::optional<Node*>& t) {
         worker.cache = nullptr;
       }
       else {
-        t = worker.queue.pop();
+        t = worker.cpu_queue.pop();
       }
 
     } while(t);
@@ -415,15 +407,15 @@ inline void Executor::_exploit_task(unsigned i, nstd::optional<Node*>& t) {
   }
 }
 
-// Function: _explore_task
-inline void Executor::_explore_task(unsigned thief, nstd::optional<Node*>& t) {
+// Function: _explore_cpu_task
+inline void Executor::_explore_cpu_task(unsigned thief, nstd::optional<Node*>& t) {
   
   assert(!t);
 
   const unsigned l = 0;
-  const unsigned r = _workers.size() + _gpu_workers.size() - 1;
+  const unsigned r = _cpu_workers.size() + _gpu_workers.size() - 1;
 
-  const size_t F = (_workers.size() + _gpu_workers.size() + 1) << 1;
+  const size_t F = (_cpu_workers.size() + _gpu_workers.size() + 1) << 1;
   const size_t Y = 100;
 
   size_t f = 0;
@@ -433,15 +425,15 @@ inline void Executor::_explore_task(unsigned thief, nstd::optional<Node*>& t) {
   while(!_done) {
   
     unsigned vtm = std::uniform_int_distribution<unsigned>{l, r}(
-      _workers[thief].rdgen
+      _cpu_workers[thief].rdgen
     );
       
     // Steal cpu workers
-    if(vtm < _workers.size()) {
-      t = (vtm == thief) ? _queue.steal() : _workers[vtm].queue.steal();
+    if(vtm < _cpu_workers.size()) {
+      t = (vtm == thief) ? _cpu_queue.steal() : _cpu_workers[vtm].cpu_queue.steal();
     }
     else {
-      t = _gpu_workers[vtm - _workers.size()].queue.steal(); 
+      t = _gpu_workers[vtm - _cpu_workers.size()].cpu_queue.steal(); 
     }
 
     if(t) {
@@ -458,36 +450,36 @@ inline void Executor::_explore_task(unsigned thief, nstd::optional<Node*>& t) {
 
 }
 
-// Function: _wait_for_task
-inline bool Executor::_wait_for_task(unsigned me, nstd::optional<Node*>& t) {
+// Function: _wait_for_cpu_task
+inline bool Executor::_wait_for_cpu_task(unsigned me, nstd::optional<Node*>& t) {
 
   wait_for_task:
 
   assert(!t);
 
-  ++_num_thieves;
+  ++_num_cpu_thieves;
 
   explore_task:
 
-  _explore_task(me, t);
+  _explore_cpu_task(me, t);
 
   if(t) {
-    if(_num_thieves.fetch_sub(1) == 1) {
-      _notifier.notify(false);
+    if(_num_cpu_thieves.fetch_sub(1) == 1) {
+      _cpu_notifier.notify(false);
     }
     return true;
   }
 
-  _notifier.prepare_wait(&_waiters[me]);
+  _cpu_notifier.prepare_wait(&_cpu_waiters[me]);
   
-  if(!_queue.empty()) {
+  if(!_cpu_queue.empty()) {
 
-    _notifier.cancel_wait(&_waiters[me]);
+    _cpu_notifier.cancel_wait(&_cpu_waiters[me]);
     
-    t = _queue.steal();
+    t = _cpu_queue.steal();
     if(t) {
-      if(_num_thieves.fetch_sub(1) == 1) {
-        _notifier.notify(false);
+      if(_num_cpu_thieves.fetch_sub(1) == 1) {
+        _cpu_notifier.notify(false);
       }
       return true;
     }
@@ -497,20 +489,20 @@ inline bool Executor::_wait_for_task(unsigned me, nstd::optional<Node*>& t) {
   }
 
   if(_done) {
-    _notifier.cancel_wait(&_waiters[me]);
-    _notifier.notify(true);
+    _cpu_notifier.cancel_wait(&_cpu_waiters[me]);
+    _cpu_notifier.notify(true);
     _gpu_notifier.notify(true);
-    --_num_thieves;
+    --_num_cpu_thieves;
     return false;
   }
 
-  if(_num_thieves.fetch_sub(1) == 1 && _num_topologies) {
-    _notifier.cancel_wait(&_waiters[me]);
+  if(_num_cpu_thieves.fetch_sub(1) == 1 && _num_topologies) {
+    _cpu_notifier.cancel_wait(&_cpu_waiters[me]);
     goto wait_for_task;
   }
    
   // Now I really need to relinguish my self to others
-  _notifier.commit_wait(&_waiters[me]);
+  _cpu_notifier.commit_wait(&_cpu_waiters[me]);
 
   return true;
 }
@@ -586,15 +578,10 @@ inline int Executor::_assign_gpu(std::atomic<int>& gpu_id) {
   auto id = gpu_id.load(std::memory_order_relaxed); 
   if(id == -1) {
     unsigned min_load_gpu = 0;
-    int min_load = _tasks_per_gpu[0].load(std::memory_order_relaxed);
-		//if(min_load == 0) {
-    //  if(tasks_per_gpu[0].compare_exchange_strong(min_load, 1, std::memory_order_seq_cst, std::memory_order_relaxed)) {
-		//		printf("Get 1\n");
-		//		return 0;
-		//	}
-		//}
+    int min_load = _devices[0].load.load(std::memory_order_relaxed);
+
     for(unsigned i=1; i<_gpu_workers.size(); i++) {
-			auto load = _tasks_per_gpu[i].load(std::memory_order_relaxed);
+			auto load = _devices[i].load.load(std::memory_order_relaxed);
       if(load < min_load) {
         min_load = load;
         min_load_gpu = i;
@@ -602,11 +589,11 @@ inline int Executor::_assign_gpu(std::atomic<int>& gpu_id) {
     }   
 
     if(gpu_id.compare_exchange_strong(id, min_load_gpu, std::memory_order_seq_cst, std::memory_order_relaxed)) {
-			_tasks_per_gpu[min_load_gpu].fetch_add(1, std::memory_order_relaxed);
+			_devices[min_load_gpu].load.fetch_add(1, std::memory_order_relaxed);
       return min_load_gpu;
     }
   }
-	_tasks_per_gpu[id].fetch_add(1, std::memory_order_relaxed);
+	_devices[id].load.fetch_add(1, std::memory_order_relaxed);
   return id;
 }
 
@@ -626,21 +613,21 @@ inline void Executor::_invoke(unsigned me, bool gpu_thread, Node* node) {
 
     void operator () (Node::Host& h)   { e._invoke_host(me, h);   }
     void operator () (Node::Push& h)   { 
-      auto d = e._assign_gpu(node->_group->device_id);
+      auto d = e._assign_gpu(h.source->_group->device_id);
       e._invoke_push(me, h, d);
-			e._tasks_per_gpu[d].fetch_sub(1, std::memory_order_relaxed);
+			e._devices[d].load.fetch_sub(1, std::memory_order_relaxed);
     }
     void operator () (Node::Pull& h)   { 
       auto d = e._assign_gpu(node->_group->device_id);
 			h.device = d;
       e._invoke_pull(me, h, d);   
-			e._tasks_per_gpu[d].fetch_sub(1, std::memory_order_relaxed);
+			e._devices[d].load.fetch_sub(1, std::memory_order_relaxed);
     }
     void operator () (Node::Kernel& h) { 
       auto d = e._assign_gpu(node->_group->device_id);
 			h.device = d;
       e._invoke_kernel(me, h, d); 
-			e._tasks_per_gpu[d].fetch_sub(1, std::memory_order_relaxed);
+			e._devices[d].load.fetch_sub(1, std::memory_order_relaxed);
     }
   };
   
@@ -687,16 +674,16 @@ inline void Executor::_invoke(unsigned me, bool gpu_thread, Node* node) {
 // Each task node has two types of tasks - regular and subflow.
 inline void Executor::_schedule(Node* node, bool bypass) {
   
-  assert(_workers.size() != 0);
+  assert(_cpu_workers.size() != 0);
   
   // caller is a worker to this pool
   auto& pt = _per_thread();
 
   if(pt.pool == this) {
-    auto &w = pt.gpu_thread ? _gpu_workers[pt.worker_id] : _workers[pt.worker_id];
+    auto &w = pt.gpu_thread ? _gpu_workers[pt.worker_id] : _cpu_workers[pt.worker_id];
     if(!bypass) {
       if(node->is_host()) {
-        w.queue.push(node);
+        w.cpu_queue.push(node);
       }
       else {
         w.gpu_queue.push(node);
@@ -713,7 +700,7 @@ inline void Executor::_schedule(Node* node, bool bypass) {
   {
     std::lock_guard<std::mutex> lock(_queue_mutex);
     if(node->is_host()) {
-      _queue.push(node);
+      _cpu_queue.push(node);
     } 
     else {
       _gpu_queue.push(node);
@@ -721,7 +708,7 @@ inline void Executor::_schedule(Node* node, bool bypass) {
   }
 
   if(node->is_host()) {
-    _notifier.notify(false);
+    _cpu_notifier.notify(false);
   }
   else {
     _gpu_notifier.notify(false);
@@ -733,7 +720,7 @@ inline void Executor::_schedule(Node* node, bool bypass) {
 // Each task node has two types of tasks - regular and subflow.
 inline void Executor::_schedule(std::vector<Node*>& nodes) {
 
-  assert(_workers.size() != 0);
+  assert(_cpu_workers.size() != 0);
   
   // We need to cacth the node count to avoid accessing the nodes
   // vector while the parent topology is removed!
@@ -747,10 +734,10 @@ inline void Executor::_schedule(std::vector<Node*>& nodes) {
   auto& pt = _per_thread();
 
   if(pt.pool == this) {
-    auto &w = pt.gpu_thread ? _gpu_workers[pt.worker_id] : _workers[pt.worker_id];
+    auto &w = pt.gpu_thread ? _gpu_workers[pt.worker_id] : _cpu_workers[pt.worker_id];
     for(size_t i=0; i<num_nodes; ++i) {
       if(nodes[i]->is_host()) {
-        w.queue.push(nodes[i]);
+        w.cpu_queue.push(nodes[i]);
       }
       else {
         w.gpu_queue.push(nodes[i]);
@@ -766,7 +753,7 @@ inline void Executor::_schedule(std::vector<Node*>& nodes) {
     std::lock_guard<std::mutex> lock(_queue_mutex);
     for(size_t k=0; k<num_nodes; ++k) {
       if(nodes[k]->is_host()) {
-        _queue.push(nodes[k]);
+        _cpu_queue.push(nodes[k]);
         num_cpu_tasks ++;
       }
       else {
@@ -776,12 +763,12 @@ inline void Executor::_schedule(std::vector<Node*>& nodes) {
     }
   }
 
-  if(num_cpu_tasks >= _workers.size()) {
-    _notifier.notify(true);
+  if(num_cpu_tasks >= _cpu_workers.size()) {
+    _cpu_notifier.notify(true);
 	}	
 	else {
 	  for(size_t i=0; i<num_cpu_tasks; i++) {
-		  _notifier.notify(false);
+		  _cpu_notifier.notify(false);
 		}
 	}
 	if(num_gpu_tasks >= _gpu_workers.size()) {
@@ -914,7 +901,7 @@ std::future<void> Executor::run_until(Heteroflow& f, P&& pred) {
 template<typename P, typename C>
 std::future<void> Executor::run_until(Heteroflow& f, P&& pred, C&& c) {
 
-  assert(_workers.size() > 0);
+  assert(_cpu_workers.size() > 0);
   
   _increment_topology();
 
@@ -1000,7 +987,7 @@ inline void Executor::_run_prologue(Topology* tpg) {
 	// Put these in topology struct ?
 	std::vector<Node*> pull_nodes;
 	std::vector<Node*> kernel_nodes;
-	std::vector<Node*> push_nodes;
+	//std::vector<Node*> push_nodes;
    
   // scan each node in the graph and build up the links
   for(auto& node : graph) {
@@ -1028,9 +1015,9 @@ inline void Executor::_run_prologue(Topology* tpg) {
 			pull_nodes.push_back(node.get());
 		}
 
-		if(node->is_push()) {
-			push_nodes.push_back(node.get());
-		}
+		//if(node->is_push()) {
+		//	push_nodes.push_back(node.get());
+		//}
   }
 
 	// Constructr root device group and assign kernel node's device group
@@ -1053,17 +1040,17 @@ inline void Executor::_run_prologue(Topology* tpg) {
 		}
 	}
 
-	// Set push node's device group
-	for(auto &n: push_nodes) {
-		for(auto d: n->_dependents) {
-			if(d->is_kernel() || d->is_pull()) {
-				assert(d->_group != nullptr);
-				n->_parent = d->_parent;
-				n->_group = d->_group;
-        break;
-			}
-		}
-	}
+	//// Set push node's device group
+	//for(auto &n: push_nodes) {
+	//	for(auto d: n->_dependents) {
+	//		if(d->is_kernel() || d->is_pull()) {
+	//			assert(d->_group != nullptr);
+	//			n->_parent = d->_parent;
+	//			n->_group = d->_group;
+  //      break;
+	//		}
+	//	}
+	//}
 
   //for(auto& node : graph) {
   //  if(node->is_push()) {
@@ -1236,7 +1223,7 @@ inline bool Executor::_wait_for_gpu_task(unsigned me, nstd::optional<Node*>& t) 
   if(_done) {
     _gpu_notifier.cancel_wait(&_gpu_waiters[me]);
     _gpu_notifier.notify(true);
-    _notifier.notify(true);
+    _cpu_notifier.notify(true);
     --_num_gpu_thieves;
     return false;
   }
@@ -1258,9 +1245,9 @@ inline void Executor::_explore_gpu_task(unsigned thief, nstd::optional<Node*>& t
   assert(!t);
 
   const unsigned l = 0;
-  const unsigned r = _workers.size() + _gpu_workers.size() - 1;
+  const unsigned r = _cpu_workers.size() + _gpu_workers.size() - 1;
 
-  const size_t F = (_workers.size() + _gpu_workers.size() + 1) << 1;
+  const size_t F = (_cpu_workers.size() + _gpu_workers.size() + 1) << 1;
   const size_t Y = 100;
 
   size_t f = 0;
@@ -1274,11 +1261,11 @@ inline void Executor::_explore_gpu_task(unsigned thief, nstd::optional<Node*>& t
     );
 
     // Steal cpu workers
-    if(vtm < _workers.size()) {
-      t = _workers[vtm].gpu_queue.steal(); 
+    if(vtm < _cpu_workers.size()) {
+      t = _cpu_workers[vtm].gpu_queue.steal(); 
     }
     else {
-      t = (vtm - _workers.size() == thief) ? _gpu_queue.steal() : _gpu_workers[vtm].gpu_queue.steal();
+      t = (vtm - _cpu_workers.size() == thief) ? _gpu_queue.steal() : _gpu_workers[vtm].gpu_queue.steal();
     }
          
     if(t) {

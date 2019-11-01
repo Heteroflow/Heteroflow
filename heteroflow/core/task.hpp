@@ -752,18 +752,10 @@ template<typename K, typename T, size_t ... I>
 void KernelTask::_invoke_kernel(
   cudaStream_t s, K f, T t, std::index_sequence<I ...>
 ) {
-	static std::atomic<int> cnt {0};
   auto& h = _node->_kernel_handle();
-	auto c = cnt.fetch_add(1);
-
   f<<<h.grid, h.block, h.shm, s>>>(_to_argument(std::get<I>(t))...);
-	
-	// Check the kernel execution status
-	cudaError_t e = cudaGetLastError();                                 
-	if(e!=cudaSuccess) { 
-		printf("Cuda failure %s:%d: '%s'\n",__FILE__,__LINE__,cudaGetErrorString(e));           
-		exit(0); 
-	}                                
+
+	HF_CHECK_CUDA(cudaGetLastError(), " kernel execution error");
 }
 
 // Procedure: _invoke_kernel
