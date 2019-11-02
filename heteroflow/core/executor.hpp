@@ -328,7 +328,6 @@ inline void Executor::_remove_streams(unsigned i) {
 
 // Procedure: _spawn
 inline void Executor::_spawn() {
-  
   for(unsigned i=0; i<_cpu_workers.size(); ++i) {
     _cpu_threads.emplace_back([this] (unsigned i) -> void {
 
@@ -336,6 +335,7 @@ inline void Executor::_spawn() {
       PerThread& pt = _per_thread();  
       pt.pool = this;
       pt.worker_id = i;
+      pt.gpu_thread = false;
       
       nstd::optional<Node*> t;
       
@@ -353,6 +353,7 @@ inline void Executor::_spawn() {
       
     }, i);     
   }
+
 
   for(unsigned i=0; i<_gpu_workers.size(); ++i) {
     _gpu_threads.emplace_back([this] (unsigned i) -> void {
@@ -378,6 +379,7 @@ inline void Executor::_spawn() {
       }    
     }, i);     
   }
+
 }
 
 // Procedure: _exploit_task
@@ -620,13 +622,13 @@ inline void Executor::_invoke(unsigned me, bool gpu_thread, Node* node) {
     unsigned me;
     Node *node;
 
-    void operator () (Node::Host& h)   { e._invoke_host(me, h);   }
-    void operator () (Node::Push& h)   { 
+    void operator () (Node::Host& h) { e._invoke_host(me, h);   }
+    void operator () (Node::Push& h) { 
       auto d = e._assign_gpu(h.source->_group->device_id);
       e._invoke_push(me, h, d);
       e._devices[d].load.fetch_sub(1, std::memory_order_relaxed);
     }
-    void operator () (Node::Pull& h)   { 
+    void operator () (Node::Pull& h) { 
       auto d = e._assign_gpu(node->_group->device_id);
       h.device = d;
       e._invoke_pull(me, h, d);   
@@ -826,7 +828,7 @@ inline void Executor::_tear_down_topology(Topology* tpg) {
   }
   // case 2: the final run of this topology
   else {
-    
+
     // ramp up the topology
     _run_epilogue(tpg);
     
@@ -935,7 +937,7 @@ std::future<void> Executor::run_until(Heteroflow& f, P&& pred, C&& c) {
     _decrement_topology_and_notify();
     return promise.get_future();
   }
-  
+ 
   /*// Special case of zero workers requires:
   //  - iterative execution to avoid stack overflow
   //  - avoid execution of last_work
@@ -996,8 +998,6 @@ std::future<void> Executor::run_until(Heteroflow& f, P&& pred, C&& c) {
 
   return future;
 }
-
-
 
 // Procedure: _run_prologue
 inline void Executor::_run_prologue(Topology* tpg) {
@@ -1088,7 +1088,6 @@ inline void Executor::_run_prologue(Topology* tpg) {
 
   tpg->_cached_num_sinks = tpg->_num_sinks;
 
-  
   // gpu device assignment
   //int cursor = 0;
   //for(auto& node : graph) {
@@ -1298,7 +1297,7 @@ inline void Executor::_explore_gpu_task(unsigned thief, nstd::optional<Node*>& t
       t = _cpu_workers[vtm].gpu_queue.steal(); 
     }
     else {
-      t = (vtm - _cpu_workers.size() == thief) ? _gpu_queue.steal() : _gpu_workers[vtm].gpu_queue.steal();
+      t = (vtm - _cpu_workers.size() == thief) ? _gpu_queue.steal() : _gpu_workers[vtm - _cpu_workers.size()].gpu_queue.steal();
     }
          
     if(t) {
