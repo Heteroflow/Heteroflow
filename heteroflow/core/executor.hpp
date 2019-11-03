@@ -760,12 +760,26 @@ inline void Executor::_schedule(std::vector<Node*>& nodes) {
 
   if(pt.pool == this) {
     auto &w = pt.gpu_thread ? _gpu_workers[pt.worker_id] : _cpu_workers[pt.worker_id];
+    bool spawn_gpu_task {false};
+    bool spawn_cpu_task {false};
     for(size_t i=0; i<num_nodes; ++i) {
       if(nodes[i]->is_host()) {
         w.cpu_queue.push(nodes[i]);
+        spawn_cpu_task = true;
       }
       else {
         w.gpu_queue.push(nodes[i]);
+        spawn_gpu_task = true;
+      }
+    }
+    if(spawn_gpu_task && !pt.gpu_thread) {
+      if(_num_gpu_actives == 0 && _num_gpu_thieves == 0) {
+        _gpu_notifier.notify(false);
+      }
+    }
+    if(spawn_cpu_task && pt.gpu_thread) {
+      if(_num_cpu_actives == 0 && _num_cpu_thieves == 0) {
+        _cpu_notifier.notify(false);
       }
     }
     return;
