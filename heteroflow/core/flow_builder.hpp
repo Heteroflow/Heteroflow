@@ -89,6 +89,9 @@ class FlowBuilder {
     */
     size_t num_nodes() const;
 
+
+    TransferTask transfer(PullTask source, PullTask target);
+
   private:
 
     Graph _graph;
@@ -141,6 +144,22 @@ PushTask FlowBuilder::push(PullTask source, ArgsT&&... args) {
   return PushTask(_graph.back().get())
         .push(source, std::forward<ArgsT>(args)...);
 }
+
+
+// Function: transfer
+TransferTask FlowBuilder::transfer(PullTask source, PullTask target) {
+
+  HF_THROW_IF(!source, "source transfer task is empty");
+  HF_THROW_IF(!target, "target transfer task is empty");
+
+  _graph.emplace_back(std::make_unique<Node>(
+    nonstd::in_place_type_t<Node::Transfer>{}
+  ));
+
+  return TransferTask(_graph.back().get())
+        .transfer(source, target);
+}
+
 
 // Function: kernel    
 template <typename F, typename... ArgsT>

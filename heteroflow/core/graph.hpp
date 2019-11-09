@@ -17,6 +17,7 @@ class Node {
   friend class HostTask;
   friend class PullTask;
   friend class PushTask;
+  friend class TransferTask;
   friend class KernelTask;
   
   friend class FlowBuilder;
@@ -44,6 +45,18 @@ class Node {
     Push() = default;
     std::function<void(cudaStream_t)> work;
     Node*        source {nullptr};
+    int beg {0};
+  };
+
+  // Transfer data
+  struct Transfer {
+    Transfer() = default;
+    std::function<void(cudaStream_t)> work;
+    Node*        source {nullptr};
+    Node*        target {nullptr};
+    int from_beg {0};
+    int to_beg   {0};
+    int range    {-1};
   };
   
   // Kernel data
@@ -59,6 +72,8 @@ class Node {
 
   struct DeviceGroup {
     std::atomic<int> device_id {-1};
+    std::atomic<int> undone {0};
+    int num_tasks {0};
   };
   
   public:
@@ -68,6 +83,7 @@ class Node {
     
     bool is_host() const;
     bool is_push() const;
+    bool is_transfer() const;
     bool is_pull() const;
     bool is_kernel() const;
 		bool is_device() const;
@@ -85,10 +101,11 @@ class Node {
     static constexpr int PULL_IDX   = 1;
     static constexpr int PUSH_IDX   = 2;
     static constexpr int KERNEL_IDX = 3;
+    static constexpr int TRANSFER_IDX  = 4;
 
     std::string _name;
 
-    nstd::variant<Host, Pull, Push, Kernel> _handle;
+    nstd::variant<Host, Pull, Push, Kernel, Transfer> _handle;
 
     std::vector<Node*> _successors;
     std::vector<Node*> _dependents;
@@ -118,11 +135,13 @@ class Node {
     Host& _host_handle();
     Pull& _pull_handle();
     Push& _push_handle();
+    Transfer& _transfer_handle();
     Kernel& _kernel_handle();
 
     const Host& _host_handle() const;
     const Pull& _pull_handle() const;
     const Push& _push_handle() const;
+    const Transfer& _transfer_handle() const;
     const Kernel& _kernel_handle() const;
 };
 
@@ -179,6 +198,16 @@ inline const Node::Push& Node::_push_handle() const {
   return nstd::get<Push>(_handle);
 }
 
+// Function: _transfer_handle    
+inline Node::Transfer& Node::_transfer_handle() {
+  return nstd::get<Transfer>(_handle);
+}
+
+// Function: _transfer_handle    
+inline const Node::Transfer& Node::_transfer_handle() const {
+  return nstd::get<Transfer>(_handle);
+}
+
 // Function: _pull_handle    
 inline Node::Pull& Node::_pull_handle() {
   return nstd::get<Pull>(_handle);
@@ -231,6 +260,11 @@ inline bool Node::is_push() const {
   return _handle.index() == PUSH_IDX;
 }
 
+// Function: is_transfer
+inline bool Node::is_transfer() const {
+  return _handle.index() == TRANSFER_IDX;
+}
+
 // Function: is_kernel
 inline bool Node::is_kernel() const {
   return _handle.index() == KERNEL_IDX;
@@ -238,7 +272,7 @@ inline bool Node::is_kernel() const {
 
 // Function: is_device
 inline bool Node::is_device() const {
-  return (is_push() || is_pull() || is_kernel());
+  return (is_push() || is_pull() || is_kernel() || is_transfer());
 }
 
 /*// Function: _height
@@ -302,6 +336,7 @@ inline void Node::_device(int d) {
     int v;
     void operator () (Host&   h) { }
     void operator () (Push&   h) { }
+    void operator () (Transfer&  h) { }
     void operator () (Pull&   h) { h.device = v; }
     void operator () (Kernel& h) { h.device = v; }
   };
@@ -317,6 +352,7 @@ inline int Node::_device() const {
     int operator () (const Push&   h) const { return -1; }
     int operator () (const Pull&   h) const { return h.device; }
     int operator () (const Kernel& h) const { return h.device; }
+    int operator () (const Transfer&  h) const { return -1; }
   };
 
   return nstd::visit(visitor{}, _handle);
@@ -383,6 +419,12 @@ inline void Node::dump(std::ostream& os) const {
     case 3:
       os << " style=filled fillcolor=\"black\" fontcolor=\"white\" shape=\"diamond\"";
     break;
+
+    // transfer
+    case 4:
+      os << " style=filled fillcolor=\"coral\"";
+    break;
+
 
     default:
     break;

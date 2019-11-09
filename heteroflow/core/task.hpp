@@ -231,16 +231,17 @@ auto TaskBase<Derived>::_make_span(T t) {
 // ----------------------------------------------------------------------------
 
 /**
-@class PullTask
+@class HostTask
 
 @brief the handle to a host (cpu) task
 */
 class HostTask : public TaskBase<HostTask> {
-  
+
   friend class TaskBase<HostTask>;
   friend class TaskBase<PullTask>;
   friend class TaskBase<PushTask>;
   friend class TaskBase<KernelTask>;
+  friend class TaskBase<TransferTask>;
 
   friend class FlowBuilder;
 
@@ -302,9 +303,11 @@ class PullTask : public TaskBase<PullTask> {
   friend class TaskBase<PullTask>;
   friend class TaskBase<PushTask>;
   friend class TaskBase<KernelTask>;
+  friend class TaskBase<TransferTask>;
   
   friend class KernelTask;
   friend class PushTask;
+  friend class TransferTask;
 
   friend class FlowBuilder;
   
@@ -342,6 +345,9 @@ class PullTask : public TaskBase<PullTask> {
     @brief disable copy from host to GPU
     */
     PullTask no_copy() { _copy = false; return *this; }
+
+    PullTask reset() { _reset = true; return *this; }
+
    
   private:
     
@@ -354,6 +360,8 @@ class PullTask : public TaskBase<PullTask> {
 
 		// A flag to indicate whether to copy memory from host to GPU
     bool _copy {true};
+    // A flag to indicate whether to reset the memory
+    bool _reset {false};
 };
 
 // Constructor
@@ -400,6 +408,7 @@ void PullTask::_invoke_pull(
     assert(h.d_size == 0);
     h.d_size = h_size;
   }
+  // Check size first (graph is resuable)
   // reallocate the global memory
   else if(h.d_size < h_size) {
     assert(h.d_data != nullptr);
@@ -410,7 +419,7 @@ void PullTask::_invoke_pull(
   h.d_data = a.allocate(h.d_size);
 
   //std::cout << "global memory " << h.d_data << ' ' << h.d_size << std::endl;
-  
+  // TODO: use nullptr to decide copy or not
   if(_copy) {
     // transfer the memory
     HF_CHECK_CUDA(
@@ -418,6 +427,14 @@ void PullTask::_invoke_pull(
         h.d_data, h_data, h_size, cudaMemcpyHostToDevice, s
       ),
       "failed to pull memory in task ", name()
+    );
+  }
+  if(_reset) {
+    HF_CHECK_CUDA(
+      cudaMemsetAsync(
+        h.d_data, 0, h_size, s
+      ),
+      "failed to reset memory in task ", name()
     );
   }
 }
@@ -430,6 +447,7 @@ void PullTask::_invoke_pull(
 @brief the handle to a push task
 */
 class PushTask : public TaskBase<PushTask> {
+
   
   friend class TaskBase<HostTask>;
   friend class TaskBase<PullTask>;
@@ -466,13 +484,20 @@ class PushTask : public TaskBase<PushTask> {
     */
     template <typename... ArgsT>
     PushTask push(PullTask source, ArgsT&&... args);
-    
+
+
+    PushTask& begin(int b) { 
+      _node->_push_handle().beg = b;
+      return *this;
+    }
+
   private:
 
     PushTask(Node* node);
     
     template <typename T>
     void _invoke_push(T, cudaStream_t);
+
 };
 
 inline PushTask::PushTask(Node* node) : 
@@ -489,6 +514,7 @@ PushTask PushTask::push(PullTask source, ArgsT&&... args) {
   auto& h = _node->_push_handle();
     
   h.source = source._node;
+
   h.work = [
     p=*this, t=make_stateful_tuple(std::forward<ArgsT>(args)...)
   ] (cudaStream_t stream) mutable {
@@ -497,6 +523,8 @@ PushTask PushTask::push(PullTask source, ArgsT&&... args) {
 
   return *this;
 }
+
+
 
 // Procedure: _invoke_push
 template <typename T>
@@ -511,19 +539,143 @@ void PushTask::_invoke_push(T t, cudaStream_t stream) {
   auto& h = _node->_push_handle();
   auto& s = h.source->_pull_handle();
 
-  //std::cout << "push " << h_data << ' ' << h_size << std::endl;
+  // std::cout << "push " << h_data << ' ' << h_size << std::endl;
 
   HF_THROW_IF(s.d_data == nullptr || s.d_size < h_size,
     "invalid memory push from ", h.source->_name, " to ", name()
   ); 
 
+  auto ptr = static_cast<void*>(static_cast<unsigned char*>(s.d_data) + h.beg);
+
   HF_CHECK_CUDA(
     cudaMemcpyAsync(
-      h_data, s.d_data, h_size, cudaMemcpyDeviceToHost, stream
+      h_data, ptr, h_size, cudaMemcpyDeviceToHost, stream
     ),
     "failed to push memory in task ", name()
   );
 }
+
+
+
+
+/**
+@class TransferTask
+
+@brief the handle to a push task
+*/
+class TransferTask : public TaskBase<TransferTask> {
+
+  friend class TaskBase<HostTask>;
+  friend class TaskBase<PullTask>;
+  friend class TaskBase<PushTask>;
+  friend class TaskBase<TransferTask>;
+  friend class TaskBase<KernelTask>;
+
+  friend class FlowBuilder;
+  
+  using node_handle_t = Node::Push;
+
+  public:
+
+    /**
+    @brief constructs an empty push task handle
+    */
+    TransferTask() = default;
+    
+    /**
+    @brief copy constructor
+    */
+    TransferTask(const TransferTask&) = default;
+
+    /**
+    @brief copy assignment
+    */
+    TransferTask& operator = (const TransferTask&) = default;
+    
+    /**
+    @brief alters the host memory block to push from gpu
+    
+    @tparam ArgsT argements types
+    @param source a source pull task of a gpu memory block
+    @param args arguments to forward to construct a span object
+    */
+    TransferTask transfer(PullTask target, PullTask source);
+
+
+    TransferTask& from_begin(int b) { 
+      _node->_transfer_handle().from_beg = b;
+      return *this;
+    }
+
+    TransferTask& to_begin(int b) { 
+      _node->_transfer_handle().to_beg = b;
+      return *this;
+    }
+
+    TransferTask& range(int r) { 
+      _node->_transfer_handle().range = r;
+      return *this;
+    }
+  
+  private:
+
+    TransferTask(Node* node);
+    
+    void _invoke_transfer(cudaStream_t);
+
+};
+
+inline TransferTask::TransferTask(Node* node) : 
+  TaskBase::TaskBase {node} {
+}
+
+// Function: transfer
+TransferTask TransferTask::transfer(PullTask target, PullTask source) {
+
+  HF_THROW_IF(!_node,  "push task can't be empty");
+  HF_THROW_IF(!source, "pull task can't be empty");
+
+  auto& h = _node->_transfer_handle();
+    
+  h.source = source._node;
+  h.target = target._node;
+
+  h.work = [
+    &, p=*this
+  ] (cudaStream_t stream) mutable {
+    p._invoke_transfer(stream);
+  };
+
+  return *this;
+}
+
+
+
+// Procedure: _invoke_transfer
+void TransferTask::_invoke_transfer(cudaStream_t stream) {
+ 
+  // get the handle and device memory
+  auto& h = _node->_transfer_handle();
+  auto& source = h.source->_pull_handle();
+  auto& target = h.target->_pull_handle();
+
+  HF_THROW_IF(source.d_data == nullptr || target.d_data == nullptr,
+    "invalid memory transfer from ", h.source->_name, " to ", name()
+  ); 
+
+  int h_size = h.range == -1 ? source.d_size : h.range;
+
+  auto from_ptr = static_cast<void*>(static_cast<unsigned char*>(source.d_data) + h.from_beg);
+  auto to_ptr = static_cast<void*>(static_cast<unsigned char*>(target.d_data) + h.to_beg);
+
+  HF_CHECK_CUDA(
+    cudaMemcpyAsync(
+      to_ptr, from_ptr, h_size, cudaMemcpyDeviceToDevice, stream
+    ),
+    "failed to transfer memory in task ", name()
+  );
+}
+
 
 // ----------------------------------------------------------------------------
 
@@ -537,6 +689,7 @@ class KernelTask : public TaskBase<KernelTask> {
   friend class TaskBase<HostTask>;
   friend class TaskBase<PullTask>;
   friend class TaskBase<PushTask>;
+  friend class TaskBase<TransferTask>;
   friend class TaskBase<KernelTask>;
 
   friend class FlowBuilder;
@@ -754,8 +907,6 @@ void KernelTask::_invoke_kernel(
 ) {
   auto& h = _node->_kernel_handle();
   f<<<h.grid, h.block, h.shm, s>>>(_to_argument(std::get<I>(t))...);
-
-	HF_CHECK_CUDA(cudaGetLastError(), " kernel execution error");
 }
 
 // Procedure: _invoke_kernel
@@ -922,9 +1073,6 @@ KernelTask KernelTask::kernel(F&& f, ArgsT&&... args) {
 
 
 }  // end of namespace hf -----------------------------------------------------
-
-
-
 
 
 
