@@ -109,6 +109,7 @@ class Node {
     std::atomic<int> _num_dependents {0};
 
     Node* _parent {this};
+    // TODO: use size instead of height, initial size value should be 1
     int   _height {0};
 
 		// Kernels in a group will be deployed on the same device
@@ -364,6 +365,7 @@ inline Node* Node::_root() {
   return ptr;
 }
 
+// TODO: use size instead of height
 // Procedure: _union
 inline void Node::_union(Node* y) {
 

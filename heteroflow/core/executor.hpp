@@ -1132,8 +1132,9 @@ inline void Executor::_run_prologue(Topology* tpg) {
       n->_group->num_tasks ++;
     }
   }
-
-  // Set pull node's device group
+  
+  // TODO: do we need to assume each pull must stick
+  // with one kernel task?
   for(auto &n: pull_nodes) {
     auto root = n->_root();
     assert(root->_group != nullptr);
@@ -1255,6 +1256,8 @@ inline void Executor::_run_epilogue(Topology* tpg) {
   for(auto& node : graph) {
     nstd::visit(visitor{*this}, node->_handle);
     node->_parent = node.get();;
+
+    // TODO: initial value of size should be 1
     node->_height = 0;
   }
 }

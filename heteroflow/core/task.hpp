@@ -341,14 +341,13 @@ class PullTask : public TaskBase<PullTask> {
     //PullTask pull(ArgsT&&... args);
 
     template<typename P, typename N>
-    PullTask pull(P&&, N&&);
+    PullTask pull(P&& pointer, N&& bytes);
 
     template<typename N>
-    PullTask pull(std::nullptr_t, N&&);
+    PullTask pull(std::nullptr_t, N&& bytes);
     
-    // TODO: I think the first argument should be nullptr
     template<typename N, typename V>
-    PullTask pull(std::nullptr_t, N&&, V&&);
+    PullTask pull(std::nullptr_t, N&& bytes, V&& value);
    
   private:
     
@@ -596,9 +595,11 @@ PushTask PushTask::push(PullTask source, P&& p, N&& n) {
   h.source = source._node;
 
   h.work = [
-    p=*this, ptr = std::forward<P>(p), size = std::forward<N>(n)
+    task = *this, 
+    ptr  = std::forward<P>(p), 
+    size = std::forward<N>(n)
   ] (cudaStream_t stream) mutable {
-    p._invoke_push(ptr, size, stream);
+    task._invoke_push(ptr, size, stream);
   };
 
   return *this;
@@ -607,6 +608,7 @@ PushTask PushTask::push(PullTask source, P&& p, N&& n) {
 // Function: push
 template <typename P, typename N, typename O>
 PushTask PushTask::push(PullTask source, P&& p, N&& n, O&& offset) {
+
   HF_THROW_IF(!_node,  "push task can't be empty");
   HF_THROW_IF(!source, "pull task can't be empty");
 
@@ -615,9 +617,12 @@ PushTask PushTask::push(PullTask source, P&& p, N&& n, O&& offset) {
   h.source = source._node;
 
   h.work = [
-    p=*this, ptr = std::forward<P>(p), size = std::forward<N>(n), offset = std::forward<O>(offset)
+    task   = *this, 
+    ptr    = std::forward<P>(p), 
+    size   = std::forward<N>(n), 
+    offset = std::forward<O>(offset)
   ] (cudaStream_t stream) mutable {
-    p._invoke_push(ptr, size, offset, stream);
+    task._invoke_push(ptr, size, offset, stream);
   };
 
   return *this;
@@ -717,7 +722,6 @@ class TransferTask : public TaskBase<TransferTask> {
     */
     //TransferTask transfer(PullTask target, PullTask source);
 
-    // TODO:
     template <typename OT, typename OS, typename N>
     TransferTask transfer(PullTask target, PullTask source, OT&&, OS&&, N&&);
 
@@ -748,9 +752,12 @@ TransferTask TransferTask::transfer(PullTask target, PullTask source, OT&& ot, O
   h.target = target._node;
 
   h.work = [
-    &, p=*this, ot=std::forward<OT>(ot), os=std::forward<OS>(os), size=std::forward<N>(size)
+    task = *this, 
+    ot   = std::forward<OT>(ot), 
+    os   = std::forward<OS>(os), 
+    size = std::forward<N>(size)
   ] (cudaStream_t stream) mutable {
-    p._invoke_transfer(stream, ot, os, size);
+    task._invoke_transfer(stream, ot, os, size);
   };
 
   return *this;
@@ -769,8 +776,8 @@ void TransferTask::_invoke_transfer(cudaStream_t stream, OT&& ot, OS&& os, N&& s
     "invalid memory transfer from ", h.source->_name, " to ", name()
   ); 
 
-  auto from_ptr = static_cast<void*>(static_cast<unsigned char*>(source.d_data) + os);
-  auto to_ptr = static_cast<void*>(static_cast<unsigned char*>(target.d_data) + ot);
+  auto from_ptr = static_cast<unsigned char*>(source.d_data) + os;
+  auto to_ptr = static_cast<unsigned char*>(target.d_data) + ot;
 
   HF_CHECK_CUDA(
     cudaMemcpyAsync(
