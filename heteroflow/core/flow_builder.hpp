@@ -93,6 +93,11 @@ class FlowBuilder {
     @brief queries the number of nodes
     */
     size_t num_nodes() const;
+    
+    /**
+    @brief queries the number of nodes
+    */
+    bool empty() const;
 
 
   private:
@@ -190,6 +195,11 @@ inline void FlowBuilder::clear() {
 // Function: num_nodes
 inline size_t FlowBuilder::num_nodes() const {
   return _graph.size();
+}
+
+// Function: empty
+inline bool FlowBuilder::empty() const {
+  return _graph.empty();
 }
 
 }  // end of namespace hf -----------------------------------------------------
