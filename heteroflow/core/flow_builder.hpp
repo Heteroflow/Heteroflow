@@ -81,8 +81,8 @@ class FlowBuilder {
     KernelTask kernel(F&& func, ArgsT&&... args);
 
 
-
-    TransferTask transfer(PullTask source, PullTask target);
+    template <typename... ArgsT>
+    TransferTask transfer(PullTask source, PullTask target, ArgsT&&... args);
 
     /**
     @brief clears the graph
@@ -149,8 +149,9 @@ PushTask FlowBuilder::push(PullTask source, ArgsT&&... args) {
 }
 
 
-// Function: transfer
-TransferTask FlowBuilder::transfer(PullTask source, PullTask target) {
+// Function: transfer 
+template <typename... ArgsT>
+TransferTask FlowBuilder::transfer(PullTask source, PullTask target, ArgsT&&... args) {
 
   HF_THROW_IF(!source, "source transfer task is empty");
   HF_THROW_IF(!target, "target transfer task is empty");
@@ -160,7 +161,7 @@ TransferTask FlowBuilder::transfer(PullTask source, PullTask target) {
   ));
 
   return TransferTask(_graph.back().get())
-        .transfer(source, target);
+        .transfer(source, target, std::forward<ArgsT>(args)...);
 }
 
 

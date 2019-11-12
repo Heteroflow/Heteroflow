@@ -53,9 +53,6 @@ class Node {
     std::function<void(cudaStream_t)> work;
     Node*        source {nullptr};
     Node*        target {nullptr};
-    int from_beg {0};
-    int to_beg   {0};
-    int range    {-1};
   };
   
   // Kernel data
