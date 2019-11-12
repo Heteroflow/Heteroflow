@@ -68,8 +68,7 @@ class Node {
 
   struct DeviceGroup {
     std::atomic<int> device_id {-1};
-    std::atomic<int> undone {0};
-    int num_tasks {0};
+    std::atomic<int> num_tasks {0};
   };
   
   public:
@@ -110,7 +109,7 @@ class Node {
 
     Node* _parent {this};
     // TODO: use size instead of height, initial size value should be 1
-    int   _height {0};
+    int   _tree_size {1};
 
 		// Kernels in a group will be deployed on the same device
     DeviceGroup* _group {nullptr};
@@ -375,18 +374,24 @@ inline void Node::_union(Node* y) {
 
   auto xroot = _root();
   auto yroot = y->_root();
-  auto xrank = xroot->_height;
-  auto yrank = yroot->_height;
+
+  assert(xroot != yroot);
+
+  auto xrank = xroot->_tree_size;
+  auto yrank = yroot->_tree_size;
 
   if(xrank < yrank) {
     xroot->_parent = yroot;
+    yroot->_tree_size += xrank;
   }
   else if(xrank > yrank) {
     yroot->_parent = xroot;
+    xroot->_tree_size += yrank;
   }
   else {
+    // This might be combined with "else if"
     yroot->_parent = xroot;
-    xroot->_height = xrank + 1;
+    xroot->_tree_size = xrank + yrank;
   }
 }
 

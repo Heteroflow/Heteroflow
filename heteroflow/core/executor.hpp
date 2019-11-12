@@ -210,7 +210,7 @@ class Executor {
     void _kernel_epilogue(Node::Kernel&);
 
     // Kernels call this function to determine the GPU for execution
-    int _assign_gpu(std::atomic<int>&);
+    int _assign_gpu(Node*);
 };
 
 // ----------------------------------------------------------------------------
@@ -607,11 +607,13 @@ inline void Executor::_invoke_transfer(unsigned me, Node::Transfer& h, int d) {
 
 
 // Procedure: _assign_gpu
-inline int Executor::_assign_gpu(std::atomic<int>& gpu_id) {
+inline int Executor::_assign_gpu(Node* node) {
 
+  auto &gpu_id = node->_group->device_id;
   auto id = gpu_id.load(std::memory_order_relaxed); 
 
   if(id == -1) {
+    auto root = node->_root();
     unsigned min_load_gpu = 0;
     {
       // Only allow one worker update the load table at a time
@@ -626,7 +628,7 @@ inline int Executor::_assign_gpu(std::atomic<int>& gpu_id) {
           auto load = _devices[i].load.load(std::memory_order_relaxed);
           if(load == 0) {
             gpu_id = i;
-            _devices[i].load.fetch_add(1, std::memory_order_relaxed);
+            _devices[i].load.fetch_add(root->_tree_size, std::memory_order_relaxed);
             return i;
           }
 
@@ -637,7 +639,7 @@ inline int Executor::_assign_gpu(std::atomic<int>& gpu_id) {
         }   
       }
       gpu_id = min_load_gpu;
-      _devices[min_load_gpu].load.fetch_add(1, std::memory_order_relaxed);
+      _devices[min_load_gpu].load.fetch_add(root->_tree_size, std::memory_order_relaxed);
     }
     return min_load_gpu;
   }
@@ -660,44 +662,44 @@ inline void Executor::_invoke(unsigned me, bool gpu_thread, Node* node) {
 
     void operator () (Node::Host& h) { e._invoke_host(me, h);   }
     void operator () (Node::Push& h) { 
-      //auto d = e._assign_gpu(h.source->_group->device_id);
       auto d = h.source->_group->device_id.load();
       assert(d != -1);
       e._invoke_push(me, h, d);
       //e._devices[d].load.fetch_sub(1, std::memory_order_relaxed);
     }
     void operator () (Node::Pull& h) { 
-      auto d = e._assign_gpu(node->_group->device_id);
+      auto d = e._assign_gpu(node);
       assert(d != -1);
       h.device = d;
       e._invoke_pull(me, h, d);   
-      auto remain = node->_group->undone.fetch_sub(1);
+      auto remain = node->_group->num_tasks.fetch_sub(1);
       if(remain == 1) {
+        auto root = node->_root();
         {
           std::lock_guard<std::mutex> lock(e._gpu_load_mtx);
-          e._devices[d].load.fetch_sub(1, std::memory_order_relaxed);
+          e._devices[d].load.fetch_sub(root->_tree_size, std::memory_order_relaxed);
         }
         // Recover for next iteration
-        node->_group->undone = node->_group->num_tasks;
+        node->_group->num_tasks = root->_tree_size;
       }
     }
     void operator () (Node::Kernel& h) { 
-      auto d = e._assign_gpu(node->_group->device_id);
+      auto d = e._assign_gpu(node);
       assert(d != -1);
       h.device = d;
       e._invoke_kernel(me, h, d); 
-      auto remain = node->_group->undone.fetch_sub(1);
+      auto remain = node->_group->num_tasks.fetch_sub(1);
       if(remain == 1) {
+        auto root = node->_root();
         {
           std::lock_guard<std::mutex> lock(e._gpu_load_mtx);
           e._devices[d].load.fetch_sub(1, std::memory_order_relaxed);
         }
         // Recover for next iteration
-        node->_group->undone = node->_group->num_tasks;
+        node->_group->num_tasks = root->_tree_size;
       }
     }
     void operator () (Node::Transfer& h) { 
-      //auto d = e._assign_gpu(h.source->_group->device_id);
       auto d = h.source->_group->device_id.load();
       assert(d != -1);
       e._invoke_transfer(me, h, d);
@@ -1123,13 +1125,11 @@ inline void Executor::_run_prologue(Topology* tpg) {
     auto root = n->_root();
     if(root->_group == nullptr) {
       root->_group = new Node::DeviceGroup;
-      root->_group->undone.fetch_add(1);
-      n->_group->num_tasks = 1;
+      root->_group->num_tasks = root->_tree_size;
     }
+
     if(n->_group == nullptr) {
       n->_group = root->_group;
-      n->_group->undone.fetch_add(1);
-      n->_group->num_tasks ++;
     }
   }
   
@@ -1140,8 +1140,6 @@ inline void Executor::_run_prologue(Topology* tpg) {
     assert(root->_group != nullptr);
     if(n->_group == nullptr) {
       n->_group = root->_group;
-      n->_group->undone.fetch_add(1);
-      n->_group->num_tasks ++;
     }
   }
 
@@ -1258,7 +1256,7 @@ inline void Executor::_run_epilogue(Topology* tpg) {
     node->_parent = node.get();;
 
     // TODO: initial value of size should be 1
-    node->_height = 0;
+    node->_tree_size = 1;
   }
 }
 
