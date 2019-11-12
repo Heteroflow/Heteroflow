@@ -346,7 +346,8 @@ class PullTask : public TaskBase<PullTask> {
 
     template<typename N>
     PullTask pull(std::nullptr_t, N&&);
-
+    
+    // TODO: I think the first argument should be nullptr
     template<typename P, typename N, typename V>
     PullTask pull(P&&, N&&, V&&);
 
@@ -499,6 +500,7 @@ void PullTask::_invoke_pull(
   if(h.d_data == nullptr) {
     assert(h.d_size == 0);
     h.d_size = h_size;
+    h.d_data = a.allocate(h.d_size);
   }
   // Check size first (graph is resuable)
   // reallocate the global memory
@@ -506,9 +508,8 @@ void PullTask::_invoke_pull(
     assert(h.d_data != nullptr);
     h.d_size = h_size;
     a.deallocate(h.d_data);
+    h.d_data = a.allocate(h.d_size);
   }
-
-  h.d_data = a.allocate(h.d_size);
 
   //std::cout << "global memory " << h.d_data << ' ' << h.d_size << std::endl;
   // transfer the memory
@@ -536,6 +537,7 @@ void PullTask::_invoke_pull(
   if(h.d_data == nullptr) {
     assert(h.d_size == 0);
     h.d_size = h_size;
+    h.d_data = a.allocate(h.d_size);
   }
   // Check size first (graph is resuable)
   // reallocate the global memory
@@ -543,9 +545,8 @@ void PullTask::_invoke_pull(
     assert(h.d_data != nullptr);
     h.d_size = h_size;
     a.deallocate(h.d_data);
+    h.d_data = a.allocate(h.d_size);
   }
-
-  h.d_data = a.allocate(h.d_size);
 }
 
 
@@ -833,6 +834,10 @@ class TransferTask : public TaskBase<TransferTask> {
     @param args arguments to forward to construct a span object
     */
     TransferTask transfer(PullTask target, PullTask source);
+
+    // TODO:
+    template <typename OT, typename OS, typename N>
+    transfer(PullTask target, PullTask source, OT&&, OS&&, N&&);
 
 
     TransferTask& from_begin(int b) { 
