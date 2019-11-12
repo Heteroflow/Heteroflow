@@ -10,7 +10,7 @@
 #include "variant.hpp"
 #include "optional.hpp"
 #include "byte.hpp"
-#include "span.hpp"
+//#include "span.hpp"
 
 // 3-rd party downgrade of C++17 libraries
 namespace nonstd {
@@ -21,7 +21,7 @@ using namespace mpark;
 
 namespace hf {
 
-using nonstd::make_span;
+//using nonstd::make_span;
 
 }
 

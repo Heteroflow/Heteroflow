@@ -45,7 +45,6 @@ class Node {
     Push() = default;
     std::function<void(cudaStream_t)> work;
     Node*        source {nullptr};
-    int beg {0};
   };
 
   // Transfer data

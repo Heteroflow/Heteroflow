@@ -78,6 +78,7 @@ class PushTask;
 class PullTask;
 class HostTask;
 class KernelTask;
+class TransferTask;
 
 //template <typename T>
 //struct stateful_decay {

@@ -68,21 +68,25 @@ int main(void) {
   const int N = 1<<20;
   
   std::vector<float> x, y;
+  float *x_ptr {nullptr};
+  float *y_ptr {nullptr};
 
   hf::Executor executor(1, 1);
   hf::Heteroflow hf("simple");
 
-  auto host_x = hf.host([&](){ x.resize(N, 1.0f); }).name("host_x");
-  auto host_y = hf.host([&](){ y.resize(N, 2.0f); }).name("host_y");
-  auto pull_x = hf.pull(x).name("pull_x");
-  auto pull_y = hf.pull(y).name("pull_y");
+  auto host_x = hf.host([&](){ x.resize(N, 1.0f); x_ptr = x.data(); }).name("host_x");
+  auto host_y = hf.host([&](){ y.resize(N, 2.0f); y_ptr = y.data(); }).name("host_y");
+  auto pull_x = hf.pull(std::ref(x_ptr), N*sizeof(float)).name("pull_x");
+  auto pull_y = hf.pull(std::ref(y_ptr), N*sizeof(float)).name("pull_y");
+
   auto kernel = hf.kernel(saxpy, N, 2.0f, pull_x, pull_y)
                   .grid_x((N+255)/256)
                   .block_x(256)
                   .name("saxpy");
 
-  auto push_x = hf.push(pull_x, x).name("push_x");
-  auto push_y = hf.push(pull_y, y).name("push_y");
+  auto push_x = hf.push(pull_x, std::ref(x_ptr), N*sizeof(float)).name("push_x");
+  auto push_y = hf.push(pull_y, std::ref(y_ptr), N*sizeof(float)).name("push_y");
+
 
   host_x.precede(pull_x);
   host_y.precede(pull_y);

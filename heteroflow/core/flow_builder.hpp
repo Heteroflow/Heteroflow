@@ -63,6 +63,7 @@ class FlowBuilder {
     */
     template <typename... ArgsT>
     PushTask push(PullTask source, ArgsT&&... args);
+
     
     /**
     @brief creates a kernel task that launches a given kernel 
@@ -79,6 +80,10 @@ class FlowBuilder {
     template <typename F, typename... ArgsT>
     KernelTask kernel(F&& func, ArgsT&&... args);
 
+
+
+    TransferTask transfer(PullTask source, PullTask target);
+
     /**
     @brief clears the graph
     */
@@ -89,8 +94,6 @@ class FlowBuilder {
     */
     size_t num_nodes() const;
 
-
-    TransferTask transfer(PullTask source, PullTask target);
 
   private:
 
