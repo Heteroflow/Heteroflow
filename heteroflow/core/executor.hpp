@@ -693,7 +693,7 @@ inline void Executor::_invoke(unsigned me, bool gpu_thread, Node* node) {
         auto root = node->_root();
         {
           std::lock_guard<std::mutex> lock(e._gpu_load_mtx);
-          e._devices[d].load.fetch_sub(1, std::memory_order_relaxed);
+          e._devices[d].load.fetch_sub(root->_tree_size, std::memory_order_relaxed);
         }
         // Recover for next iteration
         node->_group->num_tasks = root->_tree_size;
