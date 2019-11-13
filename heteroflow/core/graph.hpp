@@ -384,14 +384,9 @@ inline void Node::_union(Node* y) {
     xroot->_parent = yroot;
     yroot->_tree_size += xrank;
   }
-  else if(xrank > yrank) {
+  else {
     yroot->_parent = xroot;
     xroot->_tree_size += yrank;
-  }
-  else {
-    // This might be combined with "else if"
-    yroot->_parent = xroot;
-    xroot->_tree_size = xrank + yrank;
   }
 }
 
