@@ -1,8 +1,9 @@
 # CMake version
-cmake_minimum_required (VERSION 3.9)
+cmake_minimum_required (VERSION 3.8)
 MESSAGE(STATUS "CMAKE_ROOT: " ${CMAKE_ROOT})
 
 # Project name
+# https://cliutils.gitlab.io/modern-cmake/chapters/packages/CUDA.html
 project(Heteroflow VERSION 0.1.0 LANGUAGES CUDA CXX)
 
 # Turn on the verbose
@@ -41,63 +42,6 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   )
 endif()
 
-# -----------------------------------------------------------------------------
-# Flag setting
-# -----------------------------------------------------------------------------
-# error setting
-add_library(error_settings INTERFACE)
-add_library(hf::error_settings ALIAS error_settings)
-target_compile_options(
-  error_settings
-  INTERFACE
-  $<$<CXX_COMPILER_ID:Clang>:-Wall -Wextra -Wfatal-errors>
-  $<$<CXX_COMPILER_ID:GNU>:-Wall -Wextra -Wfatal-errors>
-  $<$<CXX_COMPILER_ID:MSVC>:/W3 /permissive->
-)
-
-# additional features
-add_library(features_settings INTERFACE)
-add_library(hf::features_settings ALIAS features_settings)
-target_compile_definitions(
-  features_settings 
-  INTERFACE 
-  $<$<CXX_COMPILER_ID:MSVC>:_ENABLE_EXTENDED_ALIGNED_STORAGE>
-)
-
-# optimization
-#
-##! Msvc flags info
-# /Zi - Produces a program database (PDB) that contains type information 
-#       and symbolic debugging information for use with the debugger.
-# /FS - Allows multiple cl.exe processes to write to the same .pdb file
-# /DEBUG - Enable debug during linking
-# /Od - Disables optimization
-# /Ox - Full optimization
-# /Oy- do not suppress frame pointers (recommended for debugging)
-#
-add_library(optimize_settings INTERFACE)
-add_library(hf::optimize_settings ALIAS optimize_settings)
-
-target_compile_options(
-  optimize_settings INTERFACE
-  $<$<AND:$<CONFIG:Release>,$<CXX_COMPILER_ID:Clang>>:-O2 -march=native>
-  $<$<AND:$<CONFIG:Release>,$<CXX_COMPILER_ID:GNU>>:-O2 -march=native>
-  $<$<AND:$<CONFIG:Release>,$<CXX_COMPILER_ID:MSVC>>:/O2 -DNDEBUG /MP>
-  $<$<AND:$<CONFIG:Debug>,$<CXX_COMPILER_ID:GNU>>:-O0 -g>
-  $<$<AND:$<CONFIG:Debug>,$<CXX_COMPILER_ID:Clang>>:-O0 -g>
-  $<$<AND:$<CONFIG:Debug>,$<CXX_COMPILER_ID:MSVC>>:/Zi /FS /DEBUG /Od /MP /MDd /Oy->
-)
-
-add_library(default_settings INTERFACE)
-add_library(hf::default_settings ALIAS default_settings)
-target_link_libraries(
-  default_settings 
-  INTERFACE 
-  hf::error_settings 
-  hf::optimize_settings 
-  hf::features_settings
-)
-
 # CXX target properties
 #set(CMAKE_CXX_STANDARD 17)
 #set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -118,7 +62,6 @@ set(HF_UTEST_DIR ${PROJECT_SOURCE_DIR}/unittests)
 set(HF_EXAMPLE_DIR ${PROJECT_SOURCE_DIR}/examples)
 set(HF_BENCHMARK_DIR ${PROJECT_SOURCE_DIR}/benchmarks)
 set(HF_THIRD_PARTY_DIR ${PROJECT_SOURCE_DIR}/3rd-party)
-
 
 # -----------------------------------------------------------------------------
 # message
@@ -165,13 +108,19 @@ include_directories(${PROJECT_SOURCE_DIR})
 # Heteroflow library interface
 # -----------------------------------------------------------------------------
 
-#cuda_add_library(${PROJECT_NAME} INTERFACE)
-
-#target_compile_features(${PROJECT_NAME} INTERFACE cxx_std_14)
-#target_include_directories(${PROJECT_NAME} INTERFACE
-#  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
-#  $<INSTALL_INTERFACE:include/> 
-#)
+add_library(${PROJECT_NAME} INTERFACE)
+target_compile_features(${PROJECT_NAME} INTERFACE cxx_std_14)
+#set_property(TARGET ${PROJECT_NAME} PROPERTY CUDA_STANDARD 14)
+target_include_directories(${PROJECT_NAME} INTERFACE
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+  $<INSTALL_INTERFACE:include/> 
+)
+target_compile_options(${PROJECT_NAME} INTERFACE
+  # CXX
+  $<$<COMPILE_LANGUAGE:CXX>:$<BUILD_INTERFACE:-Wall>>
+  # CUDA
+  $<$<COMPILE_LANGUAGE:CUDA>:$<BUILD_INTERFACE:-Xcompiler=-Wall,-Wextra,-Wfatal-errors>>
+)
 
 # -----------------------------------------------------------------------------
 # Example program 
@@ -182,11 +131,9 @@ if(${HF_BUILD_EXAMPLES})
 message(STATUS "Building examples ...")
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${HF_EXAMPLE_DIR})
 
-cuda_add_executable(saxpy ${HF_EXAMPLE_DIR}/saxpy.cu)
-set_property(TARGET saxpy PROPERTY CUDA_STANDARD 14)
-target_link_libraries(
-  saxpy ${CUDA_LIBRARIES} hf::default_settings
-)
+add_executable(saxpy ${HF_EXAMPLE_DIR}/saxpy.cu)
+#set_property(TARGET saxpy PROPERTY CUDA_STANDARD 14)
+target_link_libraries(saxpy ${CUDA_LIBRARIES} ${PROJECT_NAME})
 
 endif()
 
@@ -201,8 +148,8 @@ message(STATUS "Building unit tests ...")
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${HF_UTEST_DIR})
 
 # unittest for heteroflow
-cuda_add_executable(basics unittests/basics.cu)
-target_link_libraries(basics ${CUDA_LIBRARIES} hf::default_settings)
+add_executable(basics unittests/basics.cu)
+target_link_libraries(basics ${CUDA_LIBRARIES} ${PROJECT_NAME})
 target_include_directories(basics PRIVATE ${HF_THIRD_PARTY_DIR}/doctest)
 add_test(cpu-tasks ${HF_UTEST_DIR}/basics -tc=cpu-tasks)
 
