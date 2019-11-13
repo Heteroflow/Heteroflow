@@ -103,6 +103,9 @@ target_link_libraries(
 #set(CMAKE_CXX_STANDARD_REQUIRED ON)
 #set(CMAKE_CXX_EXTENSIONS OFF)
 
+# -----------------------------------------------------------------------------
+# project-specific variables
+# -----------------------------------------------------------------------------
 # build options
 option(HF_BUILD_EXAMPLES "Enables build of examples" ON)
 option(HF_BUILD_TESTS "Enables build of tests" ON)
