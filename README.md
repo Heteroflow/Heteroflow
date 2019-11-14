@@ -39,17 +39,16 @@ int main(void) {
   hf::Executor executor;                  // create an executor
   hf::Heteroflow hf("saxpy");             // create a task dependency graph 
   
-  auto host_x = hf.host([&]{ x = create_vector(N, 1.0f); }).name("create_x");
-  auto host_y = hf.host([&]{ y = create_vector(N, 2.0f); }).name("create_y"); 
-  auto pull_x = hf.pull(std::ref(x), B).name("pull_x");
-  auto pull_y = hf.pull(std::ref(y), B).name("pull_y");
-  auto kernel = hf.kernel((N+255)/256, 256, 0, saxpy, N, 2.0f, pull_x, pull_y)
-                  .name("saxpy");
-  auto push_x = hf.push(std::ref(x), pull_x, B).name("push_x");
-  auto push_y = hf.push(std::ref(y), pull_y, B).name("push_y");
-  auto verify = hf.host([&]{ verify_result(x, y, N); }).name("verify");
-  auto kill_x = hf.host([&]{ delete_vector(x); }).name("delete_x");
-  auto kill_y = hf.host([&]{ delete_vector(y); }).name("delete_y");
+  auto host_x = hf.host([&]{ x = create_vector(N, 1.0f); });
+  auto host_y = hf.host([&]{ y = create_vector(N, 2.0f); }); 
+  auto pull_x = hf.pull(std::ref(x), B);
+  auto pull_y = hf.pull(std::ref(y), B);
+  auto kernel = hf.kernel((N+255)/256, 256, 0, saxpy, N, 2.0f, pull_x, pull_y);
+  auto push_x = hf.push(std::ref(x), pull_x, B);
+  auto push_y = hf.push(std::ref(y), pull_y, B);
+  auto verify = hf.host([&]{ verify_result(x, y, N); });
+  auto kill_x = hf.host([&]{ delete_vector(x); });
+  auto kill_y = hf.host([&]{ delete_vector(y); });
 
   host_x.precede(pull_x);                 // host tasks run before pull tasks
   host_y.precede(pull_y);
