@@ -91,7 +91,7 @@ hf::Heteroflow heteroflow;
 ```
 
 Each task belongs to one of the following categories: 
-*host*, *pull*, *push*, and *kernel*.
+*host*, *pull*, *push*, *kernel*, and *transfer*.
 
 
 ### Host Task
