@@ -42,8 +42,7 @@ TEST_CASE("host-tasks" * doctest::timeout(300)) {
       hf::Heteroflow heteroflow;
       REQUIRE(heteroflow.num_nodes() == 0);
       REQUIRE(heteroflow.empty() == true);
-      // TODO: bug here!!!
-      //executor.run(heteroflow).wait();
+      executor.run(heteroflow).wait();
     }
   }
     
@@ -212,7 +211,7 @@ TEST_CASE("gpu-memset" * doctest::timeout(300)) {
           auto mset = heteroflow.kernel(
             (ndata+255)/256, 256, 0, k_set<char>, pull, ndata, 'z'
           );
-          auto push = heteroflow.push(pull, ptr, ndata);
+          auto push = heteroflow.push(ptr, pull, ndata);
           auto host = heteroflow.host([=](){
             for(auto j=0; j<ndata; j++) {
               REQUIRE(ptr[j] == 'z');
@@ -228,7 +227,7 @@ TEST_CASE("gpu-memset" * doctest::timeout(300)) {
     }
   }
   
-  SUBCASE("pull") {
+  SUBCASE("pull-kernel") {
     for(size_t c=1; c<=C; ++c) {
       for(size_t g=1; g<=G; ++g) {
         hf::Executor executor(c, g);
@@ -240,10 +239,43 @@ TEST_CASE("gpu-memset" * doctest::timeout(300)) {
           auto mset = heteroflow.kernel(
             (ndata+255)/256, 256, 0, k_add<char>, pull, ndata, 1
           );
-          auto push = heteroflow.push(pull, ptr, ndata);
+          auto push = heteroflow.push(ptr, pull, ndata);
           auto host = heteroflow.host([=](){
             for(auto j=0; j<ndata; j++) {
               REQUIRE(ptr[j] == 'b');
+            }
+            delete [] ptr;
+          });
+          pull.precede(mset);
+          mset.precede(push);
+          push.precede(host);
+        }
+        executor.run(heteroflow).wait();
+      }
+    }
+  }
+
+  SUBCASE("pull-kernel-push") {
+    for(size_t c=1; c<=C; ++c) {
+      for(size_t g=1; g<=G; ++g) {
+        hf::Executor executor(c, g);
+        hf::Heteroflow heteroflow;
+        for(size_t i=0; i<num_tasks; ++i) {
+          auto ndata= ::rand()%4096 + 1;
+          auto ofset= ::rand()%ndata;
+          auto ptr  = new char[ndata];
+          std::fill_n(ptr, ndata, 'z');
+          auto pull = heteroflow.pull(nullptr, ndata, 'a');
+          auto mset = heteroflow.kernel(
+            (ndata+255)/256, 256, 0, k_add<char>, pull, ndata, 1
+          );
+          auto push = heteroflow.push(ptr, pull, ofset, ndata-ofset);
+          auto host = heteroflow.host([=](){
+            for(auto j=0; j<ndata-ofset; j++) {
+              REQUIRE(ptr[j] == 'b');
+            }
+            for(auto j=ndata-ofset; j<ndata; j++) {
+              REQUIRE(ptr[j] == 'z');
             }
             delete [] ptr;
           });
@@ -269,7 +301,7 @@ TEST_CASE("gpu-memset" * doctest::timeout(300)) {
           auto madd = heteroflow.kernel(
             (ndata+255)/256, 256, 0, k_add<char>, pull, ndata, 1
           );
-          auto push = heteroflow.push(pull, ptr, ndata);
+          auto push = heteroflow.push(ptr, pull, ndata);
           auto host = heteroflow.host([=](){
             for(auto j=0; j<ndata; j++) {
               REQUIRE(ptr[j] == 'b');
@@ -308,9 +340,9 @@ TEST_CASE("gpu-transfer" * doctest::timeout(300)) {
             (ndata + 255)/256, 256, 0, k_add<char>, pull2, ndata, 1
           );
           auto trans = heteroflow.transfer(
-            pull1, pull2, 0, 0, ndata
+            pull1, 0, pull2, 0, ndata
           );
-          auto push1 = heteroflow.push(pull1, data, ndata);
+          auto push1 = heteroflow.push(data, pull1, ndata);
           auto test1 = heteroflow.host([data, ndata](){
             for(int i=0; i<ndata; ++i) {
               REQUIRE(data[i] == 'c');
@@ -349,9 +381,9 @@ TEST_CASE("gpu-transfer" * doctest::timeout(300)) {
             (ndata + 255)/256, 256, 0, k_add<char>, pull2, ndata, 1
           );
           auto trans = heteroflow.transfer(
-            pull1, pull2, offs1, offs2, togo
+            pull1, offs1, pull2, offs2, togo
           );
-          auto push1 = heteroflow.push(pull1, data, ndata);
+          auto push1 = heteroflow.push(data, pull1, ndata);
           auto test1 = heteroflow.host([=](){
             for(int i=0; i<offs1; ++i) {
               REQUIRE(data[i] == 'b');
@@ -404,7 +436,7 @@ TEST_CASE("statefulness" * doctest::timeout(300)) {
         auto kadd = heteroflow.kernel(
           std::ref(grid), std::ref(block), 0, k_add<char>, pull, std::ref(size), 1
         );
-        auto push = heteroflow.push(pull, std::ref(data), std::ref(size));
+        auto push = heteroflow.push(std::ref(data), pull, std::ref(size));
         auto test = heteroflow.host([&](){
           REQUIRE(size == vec.size());
           REQUIRE(data == vec.data());

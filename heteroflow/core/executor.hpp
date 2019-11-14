@@ -1007,8 +1007,10 @@ std::future<void> Executor::run_until(Heteroflow& f, P&& pred, C&& c) {
   
   _increment_topology();
 
-  // Special case of predicate
-  if(pred()) {
+  // Special case:
+  //   - empty graph
+  //   - pred evaluates to truth
+  if(f.empty() || pred()) {
     std::promise<void> promise;
     promise.set_value();
     _decrement_topology_and_notify();

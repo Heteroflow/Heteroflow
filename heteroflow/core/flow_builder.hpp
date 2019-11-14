@@ -45,7 +45,7 @@ class FlowBuilder {
     @brief creates a pull task that copies a given host memory block to gpu
 
     @tparam ArgsT argements types
-    @param args arguments to forward to construct a span object
+    @param args arguments to forward to construct a pull task
 
     @return PullTask handle
     */
@@ -56,42 +56,34 @@ class FlowBuilder {
     @brief creates a push task that copies a given gpu memory block to the host
     
     @tparam ArgsT argements types
-    @param source a source pull task of a gpu memory block
-    @param args arguments to forward to construct a span object
+    @param args arguments to forward to construct a push task
 
     @return PushTask handle
     */
     template <typename... ArgsT>
-    PushTask push(PullTask source, ArgsT&&... args);
-
+    PushTask push(ArgsT&&... args);
     
     /**
     @brief creates a kernel task that launches a given kernel 
-
-    @tparam G grid type
-    @tparam B block type
-    @tparam S shared memory size type
-    @tparam F kernel function type
-    @tparam ArgsT... kernel function argument types
     
-    @param grid argument to construct a grid of type dim3
-    @param block argument to construct a block of type dim3
-    @param shm argument to construct a shared memory size of type size_t
-    @param func kernel function
-    @param args... arguments to forward to the kernel function
+    @tparam ArgsT argements types
+    @param args arguments to forward to construct a kernel task
 
     @return KernelTask handle
-
-    Creates a kernel task that executes a kernel function with a configuration
     */
-    template <typename G, typename B, typename S, typename F, typename... ArgsT>
-    KernelTask kernel(
-      G&& grid, B&& block, S&& shm, F&& func, ArgsT&&... args
-    );
-
-
     template <typename... ArgsT>
-    TransferTask transfer(PullTask source, PullTask target, ArgsT&&... args);
+    KernelTask kernel(ArgsT&&... args);
+
+    /**
+    @brief creates a transfer task that send data between pull tasks
+    
+    @tparam ArgsT argements types
+    @param args arguments to forward to construct a transfer task
+    
+    @return TransferTask handle
+    */
+    template <typename... ArgsT>
+    TransferTask transfer(ArgsT&&... args);
 
     /**
     @brief clears the graph
@@ -150,57 +142,40 @@ PullTask FlowBuilder::pull(C&&... c) {
 
 // Function: push
 template <typename... ArgsT>
-PushTask FlowBuilder::push(PullTask source, ArgsT&&... args) {
-
-  HF_THROW_IF(!source, "source pull task is empty");
+PushTask FlowBuilder::push(ArgsT&&... args) {
 
   _graph.emplace_back(std::make_unique<Node>(
     nonstd::in_place_type_t<Node::Push>{}
   ));
 
   return PushTask(_graph.back().get())
-        .push(source, std::forward<ArgsT>(args)...);
+        .push(std::forward<ArgsT>(args)...);
 }
 
 
 // Function: transfer 
 template <typename... ArgsT>
-TransferTask FlowBuilder::transfer(PullTask source, PullTask target, ArgsT&&... args) {
-
-  HF_THROW_IF(!source, "source transfer task is empty");
-  HF_THROW_IF(!target, "target transfer task is empty");
+TransferTask FlowBuilder::transfer(ArgsT&&... args) {
 
   _graph.emplace_back(std::make_unique<Node>(
     nonstd::in_place_type_t<Node::Transfer>{}
   ));
 
   return TransferTask(_graph.back().get())
-        .transfer(source, target, std::forward<ArgsT>(args)...);
+        .transfer(std::forward<ArgsT>(args)...);
 }
 
 
 // Function: kernel    
-template <typename G, typename B, typename S, typename F, typename... ArgsT>
-KernelTask FlowBuilder::kernel(
-  G&& g, B&& b, S&&s, F&& func, ArgsT&&... args
-) {
+template <typename... ArgsT>
+KernelTask FlowBuilder::kernel(ArgsT&&... args) {
   
-  static_assert(
-    function_traits<F>::arity == sizeof...(args), 
-    "argument arity mismatches"
-  );
-
   _graph.emplace_back(std::make_unique<Node>(
     nonstd::in_place_type_t<Node::Kernel>{}
   ));
 
-  return KernelTask(_graph.back().get()).kernel(
-    std::forward<G>(g),
-    std::forward<B>(b),
-    std::forward<S>(s),
-    std::forward<F>(func), 
-    std::forward<ArgsT>(args)...
-  );
+  return KernelTask(_graph.back().get())
+        .kernel(std::forward<ArgsT>(args)...);
 }
 
 // Procedure: clear

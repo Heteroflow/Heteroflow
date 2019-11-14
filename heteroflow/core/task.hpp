@@ -513,17 +513,30 @@ class PushTask : public TaskBase<PushTask> {
     PushTask& operator = (const PushTask&) = default;
     
     /**
-    @brief alters the host memory block to push from gpu
+    @brief copies GPU data from a source pull task to host
     
-    @tparam ArgsT argements types
-    @param source a source pull task of a gpu memory block
-    @param args arguments to forward to construct a span object
+    @tparam P pointer type
+    @tparam N size type
+    @param ptr pointer to the host memory block
+    @param src source pull task from which data is copied
+    @param bytes number of bytes to copy
     */
     template <typename P, typename N>
-    PushTask push(PullTask, P&&, N&&);
+    PushTask push(P&& ptr, PullTask src, N&& bytes);
    
+    /**
+    @brief copies GPU data from a source pull task to host
+    
+    @tparam P pointer type
+    @tparam O offset type
+    @tparam N size type
+    @param ptr pointer to the host memory block
+    @param src source pull task from which data is copied
+    @param offset offset in bytes to the beginning point of the memory address
+    @param bytes number of bytes to copy
+    */
     template <typename P, typename O, typename N>
-    PushTask push(PullTask, P&& p, O&& offset, N&& n);
+    PushTask push(P&& ptr, PullTask src, O&& offset, N&& bytes);
 
   private:
 
@@ -543,7 +556,7 @@ inline PushTask::PushTask(Node* node) :
 
 // Function: push
 template <typename P, typename N>
-PushTask PushTask::push(PullTask source, P&& p, N&& n) {
+PushTask PushTask::push(P&& p, PullTask source, N&& n) {
   HF_THROW_IF(!_node,  "push task can't be empty");
   HF_THROW_IF(!source, "pull task can't be empty");
 
@@ -564,7 +577,7 @@ PushTask PushTask::push(PullTask source, P&& p, N&& n) {
 
 // Function: push
 template <typename P, typename O, typename N>
-PushTask PushTask::push(PullTask source, P&& p, O&& o, N&& n) {
+PushTask PushTask::push(P&& p, PullTask source, O&& o, N&& n) {
 
   HF_THROW_IF(!_node,  "push task can't be empty");
   HF_THROW_IF(!source, "pull task can't be empty");
@@ -674,15 +687,15 @@ class TransferTask : public TaskBase<TransferTask> {
     
     @tparam ArgsT argements types
 
-    @param source a source pull task of a gpu memory block
-    @param target a target pull task of a gpu memory block
-    @param OT offset of target memory block
-    @param OS offset of source memory block
-    @param N size of memory block
+    @param dst a destination pull task
+    @param dst_offset offset to the starting point of the destination memory
+    @param src a source pull task
+    @param src_offset offset to the starting point of the source memory
+    @param size bytes to transfer from the source to the destination
     */
     template <typename OT, typename OS, typename N>
     TransferTask transfer(
-      PullTask dst, PullTask src, OT&& dst_offset, OS&& src_offset, N&& size
+      PullTask dst, OT&& dst_offset, PullTask src, OS&& src_offset, N&& size
     );
 
   private:
@@ -701,7 +714,7 @@ inline TransferTask::TransferTask(Node* node) :
 // Function: transfer 
 template <typename OT, typename OS, typename N>
 TransferTask TransferTask::transfer(
-  PullTask target, PullTask source, OT&& ot, OS &&os, N&& size
+  PullTask target, OT&& ot, PullTask source, OS &&os, N&& size
 ) {
 
   HF_THROW_IF(!_node,  "transfer task can't be empty");
@@ -911,6 +924,11 @@ template <typename G, typename B, typename S, typename F, typename... ArgsT>
 KernelTask KernelTask::kernel(
   G&& g, B&& b, S&& s, F&& f, ArgsT&&... args
 ) {
+  
+  static_assert(
+    function_traits<F>::arity == sizeof...(args), 
+    "argument arity mismatches"
+  );
   
   HF_THROW_IF(!_node, "kernel task is empty");
   

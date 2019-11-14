@@ -52,8 +52,8 @@ int main(void) {
   auto pull_y = hf.pull(std::ref(y), B).name("pull_y");
   auto kernel = hf.kernel((N+255)/256, 256, 0, saxpy, N, 2.0f, pull_x, pull_y)
                   .name("saxpy");
-  auto push_x = hf.push(pull_x, std::ref(x), B).name("push_x");
-  auto push_y = hf.push(pull_y, std::ref(y), B).name("push_y");
+  auto push_x = hf.push(std::ref(x), pull_x, B).name("push_x");
+  auto push_y = hf.push(std::ref(y), pull_y, B).name("push_y");
   auto verify = hf.host([&]{ verify_result(x, y, N); }).name("verify");
   auto kill_x = hf.host([&]{ delete_vector(x); }).name("delete_x");
   auto kill_y = hf.host([&]{ delete_vector(y); }).name("delete_y");

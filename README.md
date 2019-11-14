@@ -45,8 +45,8 @@ int main(void) {
   auto pull_y = hf.pull(std::ref(y), B).name("pull_y");
   auto kernel = hf.kernel((N+255)/256, 256, 0, saxpy, N, 2.0f, pull_x, pull_y)
                   .name("saxpy");
-  auto push_x = hf.push(pull_x, std::ref(x), B).name("push_x");
-  auto push_y = hf.push(pull_y, std::ref(y), B).name("push_y");
+  auto push_x = hf.push(std::ref(x), pull_x, B).name("push_x");
+  auto push_y = hf.push(std::ref(y), pull_y, B).name("push_y");
   auto verify = hf.host([&]{ verify_result(x, y, N); }).name("verify");
   auto kill_x = hf.host([&]{ delete_vector(x); }).name("delete_x");
   auto kill_y = hf.host([&]{ delete_vector(y); }).name("delete_y");
@@ -128,7 +128,7 @@ hf::PullTask gpu_mem2 = heteroflow.pull(nullptr, 256, 0);
 A push task copies GPU data in a pull task back to a host memory area.
 
 ```cpp
-hf::PushTask push = heteroflow.push(pull, data, 10*sizeof(float));
+hf::PushTask push = heteroflow.push(data, pull, 10*sizeof(float));
 ```
 
 You can give an *offset* in bytes to indicate the starting point
@@ -138,7 +138,7 @@ copies the remaining seven floats from a memory block of a pull task
 to a host memory area pointed by data.
 
 ```cpp
-hf::PushTask push = heteroflow.push(pull, data, 3*sizeof(float), 7*sizeof(float))
+hf::PushTask push = heteroflow.push(data, pull, 3*sizeof(float), 7*sizeof(float))
 ```
 
 ### Kernel Task
@@ -155,13 +155,36 @@ __global__ void my_kernel(float* data, int N);
 dim3 grid {1, 1, 1}, block {10, 1, 1};
 size_t shared_memory {0};
 
+// implicit coversion of pull to float*
 hf::KernelTask k1 = hf.kernel(grid, block, shared_memory, my_kernel, pull, 10); 
 ```
 
-Heteroflow gives users full privileges to leverage their domain-specific knowledge
-to write a high-performance [CUDA][cuda-zone] kernel. 
-Users focus on developing kernels and CPU tasks using native CUDA toolkits,
+Heteroflow gives users full privileges to 
+craft a [CUDA][cuda-zone] kernel 
+that is commensurate with their domain knowledge.
+Users focus on developing high-performance kernels and 
+CPU tasks using native CUDA toolkits,
 while leaving task parallelism to Heteroflow.
+
+### Transfer Task
+
+A transfer task copies GPU data from a source pull task to a target pull task.
+The code snippet blow copies data from `[ptr2+56, ptr2+256)` 
+to `[ptr1+10, ptr1+210)`, assuming `ptr1` and `ptr2` point to the beginning
+address of the GPU memory in `pull1` and `pull2`, respectively.
+
+```cpp
+hf::PullTask pull1 = heteroflow.pull(nullptr, 256, 'a');
+hf::PullTask pull2 = heteroflow.pull(nullptr, 256, 'b'); 
+
+hf::TransferTask transfer = hteroflow.transfer(
+  pull1,    // destination pull task
+  10,       // offset at the destination memory block
+  pull2,    // source pull task
+  56,       // offset at the source memory block
+  200       // bytes to copy from the source to the destination
+);
+```
 
 ## Step 2: Define Task Dependencies
 
@@ -171,13 +194,15 @@ The dependency links must be a
 You can add a preceding link to force one task to run before another.
 
 ```cpp
-A.precede(B);  // A runs before B.
+A.precede(B);        // A runs before B
+A.precede(C, D, E);  // A runs before C, D, and E
 ```
 
 Or you can add a succeed link to force one task to run after another.
 
 ```cpp
-A.succeed(B);  // A runs after B
+A.succeed(B);        // A runs after B
+A.succeed(C, D, E);  // A runs after C, D, and E
 ```
 
 ## Step 3: Execute a Heteroflow
@@ -189,6 +214,13 @@ through an efficient *work-stealing* algorithm.
 
 ```cpp
 tf::Executor executor;
+```
+
+You can configure an executor with a fixed number threads to
+operate on CPU cores and GPUs.
+
+```cpp
+tf::Executor executor(32, 4);  // 32 CPU cores and 4 GPUs
 ```
 
 The executor provides many methods to run a heteroflow.
@@ -209,7 +241,7 @@ executor.run_until(taskflow, [counter=4](){ return --counter == 0; } );
 You can call `wait_for_all` to block the executor until all associated taskflows complete.
 
 ```cpp
-executor.wait_for_all();  // block until all associated tasks finish
+executor.wait_for_all();  // blocks until all associated tasks finish
 ```
 
 Notice that executor does not own any heteroflow. 
@@ -221,27 +253,33 @@ each representing a specific part of your parallel decomposition.
 ## Stateful Execution
 
 Heteroflow leverages modern C++ meta-programming 
-to let users capture variables in reference through [std::ref][std::ref].
-for *stateful* execution.
-Maintaining state transitions of variables enables flexible runtime controls 
-and fine-grained task parallelism.
+to let users capture variables in reference through [std::ref][std::ref]
+for *stateful* execution
+that enables flexible runtime controls and fine-grained task parallelism.
 Users can partition a large workload into small parallel blocks and append
 dependencies between tasks to keep variable states consistent.
-Below the code snippet uses a host task to allocate a memory block.
-The change on `data` and `size` will be visible to the execution
-context of the succeeding pull task.
+Below the code snippet demonstrates this concept.
 
 ```cpp
+__global my_kernel(PullTask, size_t N);  // custom kernel
+
 float* data{nullptr};
 size_t size{0};
+dim3 grid;
 
-auto host = heteroflow.host([&](){      // captures everything by reference
-  data = new float[100];                // changes size and data at runtime
-  size = 100*sizeof(float);
+auto host = heteroflow.host([&](){       // captures everything by reference
+  data = new float[1000];                // changes size and data at runtime
+  size = 1000*sizeof(float);
+  grid = (1000+255)/256;                 // changes the kernel execution shape
 });
 
+// new data and size values are visible to this pull task's execution context
 auto pull = heteroflow.pull(std::ref(data), std::ref(size))
                       .succeed(host);
+
+// new grid size is visible to this kernel tasks' execution context
+auto kernel = heteroflow.kernel(std::ref(grid), 256, 0, my_kernel, pull, 1000)
+                        .succeed(pull);
 ```
 
 The variables to forward to other tasks can be made stateful
