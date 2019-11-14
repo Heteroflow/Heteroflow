@@ -31,28 +31,28 @@ __global__ void saxpy(int n, float a, float *x, float *y) {
 
 int main(void) {
 
-  const int N = 1<<20;
-  std::vector<float> x, y;
+  const int num_items = 1<<20;                    // total items
+  const int num_bytes = num_items*sizeof(float);  // total bytes
+  float* x {nullptr};
+  float* y {nullptr};
 
-  hf::Executor executor;              // create an executor
-  hf::Heteroflow hf("saxpy");         // create a task dependency graph 
+  hf::Executor executor;                          // create an executor
+  hf::Heteroflow hf("saxpy");                     // create a task dependency graph 
 
-  auto host_x = hf.host([&](){ x.resize(N, 1.0f); });
-  auto host_y = hf.host([&](){ y.resize(N, 2.0f); });
-  auto pull_x = hf.pull(x); 
-  auto pull_y = hf.pull(y);           
-  auto kernel = hf.kernel(saxpy, N, 2.0f, pull_x, pull_y)
-                  .grid_x((N+255)/256)
-                  .block_x(256);
-  auto push_x = hf.push(pull_x, x);
-  auto push_y = hf.push(pull_y, y);
+  auto host_x = hf.host([&](){ x = new float[num_items]; std::fill_n(x, num_items, 1.0f); });
+  auto host_y = hf.host([&](){ y = new float[num_items]; std::fill_n(y, num_items, 2.0f); });
+  auto pull_x = hf.pull(std::ref(x), num_bytes); 
+  auto pull_y = hf.pull(std::ref(y), num_bytes);           
+  auto kernel = hf.kernel((num_items+255)/256, 256, 0, saxpy, num_items, 2.0f, pull_x, pull_y);
+  auto push_x = hf.push(pull_x, std::ref(x));
+  auto push_y = hf.push(pull_y, std::ref(y));
 
-  host_x.precede(pull_x);             // host_x runs before pull_x
-  host_y.precede(pull_y);             // host_y runs before pull_y
-  kernel.precede(push_x, push_y)      // kernel runs before push_x and push_y
-        .succeed(pull_x, pull_y);     // kernel runs after  pull_x and pull_Y
+  host_x.precede(pull_x);                         // host_x runs before pull_x
+  host_y.precede(pull_y);                         // host_y runs before pull_y
+  kernel.precede(push_x, push_y)                  // kernel runs before push_x and push_y
+        .succeed(pull_x, pull_y);                 // kernel runs after  pull_x and pull_Y
 
-  executor.run(hf).wait();            // execute the task dependency graph
+  executor.run(hf).wait();                        // execute the task dependency graph
 }
 ```
 
@@ -84,7 +84,7 @@ Create a heteroflow object to build a task dependency graph:
 hf::Heteroflow heteroflow;
 ```
 
-Each task belongs to one of the four categories: 
+Each task belongs to one of the following categories: 
 *host*, *pull*, *push*, and *kernel*.
 
 
@@ -99,36 +99,55 @@ hf::HostTask host = heteroflow.host([](){ std::cout << "my host task\n"; });
 
 ### Pull Task
 
-A pull task manages GPU memory allocation
-and copies data from the host to a GPU device.
+A pull task allocates memory on a GPU and copies
+data from the host to the GPU.
 
 ```cpp
-std::vector<int> data1(100);
-hf::PullTask pull1 = heteroflow.pull(data1);      // data span from a container
-
-float* data2 = new float[10];
-hf::PullTask pull2 = heteroflow.pull(data2, 10);  // data span from a raw memory block
+float* data = new float[10];
+hf::PullTask pull = heteroflow.pull(data, 10*sizeof(float));
 ```
 
-The arguments to forward to `Heteroflow::pull` 
-must conform to the contract of C++20 [std::span][std::span]
-through which we use [span::data][span::data] and
-[span::size_bytes][span::size_bytes] 
-to perform data copy.
-Currently, we use the drop-in replacement [span-lite][span-lite].
+If the data pointer is given a `nullptr`, 
+the pull task only allocates a GPU memory area of the given bytes.
+In this case, you can give an additional value to initialize 
+for each byte of the memory.
+
+```cpp
+hf::PullTask gpu_mem1 = heteroflow.pull(nullptr, 256);
+hf::PullTask gpu_mem2 = heteroflow.pull(nullptr, 256, 0); 
+```
+
+The arguments to pass to `Heteroflow::pull` can be *stateful*,
+in which variables are captured by reference through [std::ref][std::ref].
+Stateful capture is useful for variables that cannot decide 
+values until runtime,
+or that take advantage of host tasks to modify values for 
+task parallelism.
+
+```cpp
+float* runtime_data{nullptr};
+size_t size{0}, bytes{0};
+hf::HostTask host = heteroflow.host([&](){      // capture everything by reference
+  runtime_data = new float[size=100];           // change size and data at runtime
+  bytes = size*sizeof(float);
+});
+hf::PullTask stateful_pull = heteroflow.pull(std::ref(runtime_data), std::ref(bytes));
+```
  
 ### Push Task
 
-A push task copies GPU data associated with a pull task back to the host.
-The arguments to forward to `Heteroflow::push`
-consist of two parts: a pull task and the rest to construct
-a [std::span][std::span] object by which we perform
-data copy in the same way as the pull task.
+A push task copies GPU data associated with a pull task back to a host memory area.
 
 ```cpp
-// data1 and data2 are from the pull example above
-hf::PushTask push1 = heteroflow.push(pull1, data1);      // copy data back to data1
-hf::PullTask push2 = heteroflow.pull(pull2, data2, 10);  // copy data back to data2
+// using the pull and data example above
+hf::PushTask push = heteroflow.push(pull, data, 10*sizeof(float));
+```
+
+You can give an *offset* in bytes to change the beginning point of the memory block in the pull task.
+
+```cpp
+// skips the first 3 floats in the gpu memory block of pull
+hf::PushTask push = heteroflow.push(pull, data, 3*sizeof(float), 7*sizeof(float))
 ```
 
 ### Kernel Task
@@ -141,19 +160,12 @@ each pull task can convert to a pointer of whatever data type specified
 in the kernel function.
 
 ```cpp
-__global__ void k1(int* data, int N);
-__global__ void k2(float* data, int N);
+__global__ void my_kernel(float* data, int N);
 
-hf::KernelTask k1 = hf.kernel(k1, pull1, 100);  // convert the GPU data of pull1 to int*
-hf::KernelTask k2 = hf.kernel(k2, pull2, 10);   // convert the GPU data of pull2 to float*
-```
+dim3 grid {1, 1, 1}, block {10, 1, 1};
+size_t shared_memory {0};
 
-The kernel task provides a rich set of methods to let you alter
-the kernel configuration.
-
-```cpp
-k1.grid_x(N/256).block_x(256);                  // configure the x dimension
-k2.grid(N/256, 1, 1).block(256, 1, 1);          // configure the x-y-z dimension
+hf::KernelTask k1 = hf.kernel(grid, block, shared_memory, my_kernel, pull, 10); 
 ```
 
 Heteroflow gives users full privileges to leverage their domain-specific knowledge
@@ -227,13 +239,11 @@ Heteroflow is licensed under the [MIT License](./LICENSE).
 
 * * *
 
-[std::span]:             https://en.cppreference.com/w/cpp/container/span
-[span::size_bytes]:      https://en.cppreference.com/w/cpp/container/span/size_bytes
+[std::ref]:              https://en.cppreference.com/w/cpp/utility/functional/ref
 [span::data]:            https://en.cppreference.com/w/cpp/container/span/data
 [std::invoke]:           https://en.cppreference.com/w/cpp/utility/functional/invoke
 [std::future]:           https://en.cppreference.com/w/cpp/thread/future
 
-[span-lite]:             https://github.com/martinmoene/span-lite
 
 [cuda-zone]:             https://developer.nvidia.com/cuda-zone
 [nvcc]:                  https://developer.nvidia.com/cuda-llvm-compiler
