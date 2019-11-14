@@ -44,25 +44,22 @@ class Node {
   struct Push {
     Push() = default;
     std::function<void(cudaStream_t)> work;
-    Node*        source {nullptr};
+    Node* source {nullptr};
   };
 
   // Transfer data
   struct Transfer {
     Transfer() = default;
     std::function<void(cudaStream_t)> work;
-    Node*        source {nullptr};
-    Node*        target {nullptr};
+    Node* source {nullptr};
+    Node* target {nullptr};
   };
   
   // Kernel data
   struct Kernel {
     Kernel() = default;
     std::function<void(cudaStream_t)> work;
-    int          device     {-1};
-    ::dim3       grid       {1, 1, 1};
-    ::dim3       block      {1, 1, 1}; 
-    size_t       shm        {0};
+    int device {-1};
     std::vector<Node*> sources;
   };
 
@@ -330,9 +327,9 @@ inline void Node::_device(int d) {
 
   struct visitor {
     int v;
-    void operator () (Host&   h) { }
-    void operator () (Push&   h) { }
-    void operator () (Transfer&  h) { }
+    void operator () (Host&) { }
+    void operator () (Push&) { }
+    void operator () (Transfer&) { }
     void operator () (Pull&   h) { h.device = v; }
     void operator () (Kernel& h) { h.device = v; }
   };
@@ -344,11 +341,11 @@ inline void Node::_device(int d) {
 inline int Node::_device() const {
 
   struct visitor {
-    int operator () (const Host&   h) const { return -1; }
-    int operator () (const Push&   h) const { return -1; }
+    int operator () (const Host&) const { return -1; }
+    int operator () (const Push&) const { return -1; }
     int operator () (const Pull&   h) const { return h.device; }
     int operator () (const Kernel& h) const { return h.device; }
-    int operator () (const Transfer&  h) const { return -1; }
+    int operator () (const Transfer&) const { return -1; }
   };
 
   return nstd::visit(visitor{}, _handle);
@@ -415,7 +412,7 @@ inline void Node::dump(std::ostream& os) const {
     
     // kernel
     case 3:
-      os << " style=filled fillcolor=\"black\" fontcolor=\"white\" shape=\"diamond\"";
+      os << " style=filled fillcolor=\"black\" fontcolor=\"white\"";
     break;
 
     // transfer

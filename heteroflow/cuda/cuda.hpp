@@ -11,7 +11,7 @@ namespace hf{ namespace cuda {
 /**
 @brief queries the number of available devices
 */
-inline size_t num_devices() {
+inline unsigned num_devices() {
 	int N = 0;
   HF_CHECK_CUDA(cudaGetDeviceCount(&N), "failed to get device count");
 	return N;

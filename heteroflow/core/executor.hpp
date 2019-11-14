@@ -519,7 +519,7 @@ inline bool Executor::_wait_for_cpu_task(unsigned me, nstd::optional<Node*>& t) 
 }
 
 // Procedure: _invoke_host
-inline void Executor::_invoke_host(unsigned me, Node::Host& h) {
+inline void Executor::_invoke_host(unsigned, Node::Host& h) {
   h.work();
 }
 
@@ -1194,15 +1194,15 @@ inline void Executor::_run_prologue(Topology* tpg) {
 }
 
 // Procedure: _host_epilogue
-inline void Executor::_host_epilogue(Node::Host& h) {
+inline void Executor::_host_epilogue(Node::Host&) {
 }
 
 // Procedure: _push_epilogue
-inline void Executor::_push_epilogue(Node::Push& h) {
+inline void Executor::_push_epilogue(Node::Push&) {
 }
 
 // Procedure: _transfer_epilogue
-inline void Executor::_transfer_epilogue(Node::Transfer& h) {
+inline void Executor::_transfer_epilogue(Node::Transfer&) {
 }
 
 

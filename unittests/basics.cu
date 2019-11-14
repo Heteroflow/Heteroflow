@@ -4,17 +4,40 @@
 
 #include <heteroflow/heteroflow.hpp>
 
+// ----------------------------------------------------------------------------
+// Parameters
+// ----------------------------------------------------------------------------
+const size_t C = std::min(32u, std::thread::hardware_concurrency());
+const size_t G = std::min(8u, hf::cuda::num_devices());
+
+// ----------------------------------------------------------------------------
+// Kernel
+// ----------------------------------------------------------------------------
+template <typename T>
+__global__ void k_set(T* ptr, size_t N, T value) {
+  int i = blockIdx.x*blockDim.x + threadIdx.x;
+  if (i < N) {
+    ptr[i] = value;
+  }
+}
+
+template <typename T>
+__global__ void k_add(T* ptr, size_t N, T value) {
+  int i = blockIdx.x*blockDim.x + threadIdx.x;
+  if (i < N) {
+    ptr[i] += value;
+  }
+}
+
 // --------------------------------------------------------
-// Testcase: cpu-tasks
+// Testcase: host-tasks
 // --------------------------------------------------------
-TEST_CASE("cpu-tasks" * doctest::timeout(300)) {
+TEST_CASE("host-tasks" * doctest::timeout(300)) {
   
-  const size_t min_W = 1;
-  const size_t max_W = 32;
   const size_t num_tasks = 100;
 
   SUBCASE("Empty") {
-    for(size_t W=min_W; W<=max_W; ++W) {
+    for(size_t W=1; W<=C; ++W) {
       hf::Executor executor(W);
       hf::Heteroflow heteroflow;
       REQUIRE(heteroflow.num_nodes() == 0);
@@ -25,7 +48,7 @@ TEST_CASE("cpu-tasks" * doctest::timeout(300)) {
   }
     
   SUBCASE("Placeholder") {
-    for(size_t W=min_W; W<=max_W; ++W) {
+    for(size_t W=1; W<=C; ++W) {
       hf::Executor executor(W);
       hf::Heteroflow heteroflow;
       std::atomic<int> counter {0};
@@ -53,7 +76,7 @@ TEST_CASE("cpu-tasks" * doctest::timeout(300)) {
   }
 
   SUBCASE("EmbarrassinglyParallel"){
-    for(size_t W=min_W; W<=max_W; ++W) {
+    for(size_t W=1; W<=C; ++W) {
       hf::Executor executor(W);
       hf::Heteroflow heteroflow;
       std::atomic<int> counter {0};
@@ -82,7 +105,7 @@ TEST_CASE("cpu-tasks" * doctest::timeout(300)) {
   }
   
   SUBCASE("BinarySequence"){
-    for(size_t W=min_W; W<=max_W; ++W) {
+    for(size_t W=1; W<=C; ++W) {
       hf::Executor executor(W);
       hf::Heteroflow heteroflow;
       std::atomic<int> counter {0};
@@ -114,7 +137,7 @@ TEST_CASE("cpu-tasks" * doctest::timeout(300)) {
   }
 
   SUBCASE("LinearCounter"){
-    for(size_t W=min_W; W<=max_W; ++W) {
+    for(size_t W=1; W<=C; ++W) {
       hf::Executor executor(W);
       hf::Heteroflow heteroflow;
       std::atomic<int> counter {0};
@@ -135,78 +158,273 @@ TEST_CASE("cpu-tasks" * doctest::timeout(300)) {
     }
   }
  
-  //SUBCASE("Broadcast"){
-  //  auto src = taskflow.emplace([&counter]() {counter -= 1;});
-  //  for(size_t i=1; i<num_tasks; i++){
-  //    silent_tasks.emplace_back(
-  //      taskflow.emplace([&counter]() {REQUIRE(counter == -1);})
-  //    );
-  //  }
-  //  taskflow.broadcast(src, silent_tasks);
-  //  executor.run(taskflow).get();
-  //  REQUIRE(counter == - 1);
-  //  REQUIRE(taskflow.num_nodes() == num_tasks);
-  //}
+  SUBCASE("Broadcast"){
+    for(size_t W=1; W<=C; ++W) {
+      hf::Executor executor(W);
+      hf::Heteroflow heteroflow;
+      std::atomic<int> counter {0};
+      std::vector<hf::HostTask> tasks;
+      auto src = heteroflow.host([&counter]() {counter -= 1;});
+      for(size_t i=1; i<num_tasks; i++){
+        auto tgt = heteroflow.host([&counter]() {REQUIRE(counter == -1);});
+        src.precede(tgt);
+      }
+      executor.run(heteroflow).get();
+      REQUIRE(counter == - 1);
+      REQUIRE(heteroflow.num_nodes() == num_tasks);
+    }
+  }
 
-  //SUBCASE("Succeed"){
-  //  auto dst = taskflow.emplace([&]() { REQUIRE(counter == num_tasks - 1);});
-  //  for(size_t i=1;i<num_tasks;i++){
-  //    silent_tasks.emplace_back(
-  //      taskflow.emplace([&counter]() {counter += 1;})
-  //    );
-  //  }
-  //  dst.succeed(silent_tasks);
-  //  executor.run(taskflow).get();
-  //  REQUIRE(counter == num_tasks - 1);
-  //  REQUIRE(taskflow.num_nodes() == num_tasks);
-  //}
-
-  //SUBCASE("MapReduce"){
-  //  auto src = taskflow.emplace([&counter]() {counter = 0;});
-  //  for(size_t i=0;i<num_tasks;i++){
-  //    silent_tasks.emplace_back(
-  //      taskflow.emplace([&counter]() {counter += 1;})
-  //    );
-  //  }
-  //  taskflow.broadcast(src, silent_tasks);
-  //  auto dst = taskflow.emplace(
-  //    [&counter, num_tasks]() { REQUIRE(counter == num_tasks);}
-  //  );
-  //  taskflow.gather(silent_tasks, dst);
-  //  executor.run(taskflow).get();
-  //  REQUIRE(taskflow.num_nodes() == num_tasks + 2);
-  //}
-
-  //SUBCASE("Linearize"){
-  //  for(size_t i=0;i<num_tasks;i++){
-  //    silent_tasks.emplace_back(
-  //      taskflow.emplace([&counter, i]() { 
-  //        REQUIRE(counter == i); counter += 1;}
-  //      )
-  //    );
-  //  }
-  //  taskflow.linearize(silent_tasks);
-  //  executor.run(taskflow).get();
-  //  REQUIRE(counter == num_tasks);
-  //  REQUIRE(taskflow.num_nodes() == num_tasks);
-  //}
-
-  //SUBCASE("Kite"){
-  //  auto src = taskflow.emplace([&counter]() {counter = 0;});
-  //  for(size_t i=0;i<num_tasks;i++){
-  //    silent_tasks.emplace_back(
-  //      taskflow.emplace([&counter, i]() { 
-  //        REQUIRE(counter == i); counter += 1; }
-  //      )
-  //    );
-  //  }
-  //  taskflow.broadcast(src, silent_tasks);
-  //  taskflow.linearize(silent_tasks);
-  //  auto dst = taskflow.emplace(
-  //    [&counter, num_tasks]() { REQUIRE(counter == num_tasks);}
-  //  );
-  //  taskflow.gather(silent_tasks, dst);
-  //  executor.run(taskflow).get();
-  //  REQUIRE(taskflow.num_nodes() == num_tasks + 2);
-  //}
+  SUBCASE("Succeed"){
+    for(size_t W=1; W<=C; ++W) {
+      hf::Executor executor(W);
+      hf::Heteroflow heteroflow;
+      std::atomic<int> counter {0};
+      std::vector<hf::HostTask> tasks;
+      auto dst = heteroflow.host([&]() { REQUIRE(counter == num_tasks - 1);});
+      for(size_t i=1;i<num_tasks;i++){
+        auto src = heteroflow.host([&counter]() {counter += 1;});
+        dst.succeed(src);
+      }
+      executor.run(heteroflow).get();
+      REQUIRE(counter == num_tasks - 1);
+      REQUIRE(heteroflow.num_nodes() == num_tasks);
+    }
+  }
 }
+
+// --------------------------------------------------------
+// Testcase: gpu-memset
+// --------------------------------------------------------
+TEST_CASE("gpu-memset" * doctest::timeout(300)) {
+
+  const size_t num_tasks = 100;
+
+  SUBCASE("kernel") {
+    for(size_t c=1; c<=C; ++c) {
+      for(size_t g=1; g<=G; ++g) {
+        hf::Executor executor(c, g);
+        hf::Heteroflow heteroflow;
+        for(size_t i=0; i<num_tasks; ++i) {
+          auto ndata= ::rand()%4096 + 1;
+          auto ptr  = new char[ndata];
+          auto pull = heteroflow.pull(nullptr, ndata);
+          auto mset = heteroflow.kernel(
+            (ndata+255)/256, 256, 0, k_set<char>, pull, ndata, 'z'
+          );
+          auto push = heteroflow.push(pull, ptr, ndata);
+          auto host = heteroflow.host([=](){
+            for(auto j=0; j<ndata; j++) {
+              REQUIRE(ptr[j] == 'z');
+            }
+            delete [] ptr;
+          });
+          pull.precede(mset);
+          mset.precede(push);
+          push.precede(host);
+        }
+        executor.run(heteroflow).wait();
+      }
+    }
+  }
+  
+  SUBCASE("pull") {
+    for(size_t c=1; c<=C; ++c) {
+      for(size_t g=1; g<=G; ++g) {
+        hf::Executor executor(c, g);
+        hf::Heteroflow heteroflow;
+        for(size_t i=0; i<num_tasks; ++i) {
+          auto ndata= ::rand()%4096 + 1;
+          auto ptr  = new char[ndata];
+          auto pull = heteroflow.pull(nullptr, ndata, 'a');
+          auto mset = heteroflow.kernel(
+            (ndata+255)/256, 256, 0, k_add<char>, pull, ndata, 1
+          );
+          auto push = heteroflow.push(pull, ptr, ndata);
+          auto host = heteroflow.host([=](){
+            for(auto j=0; j<ndata; j++) {
+              REQUIRE(ptr[j] == 'b');
+            }
+            delete [] ptr;
+          });
+          pull.precede(mset);
+          mset.precede(push);
+          push.precede(host);
+        }
+        executor.run(heteroflow).wait();
+      }
+    }
+  }
+  
+  SUBCASE("from-host") {
+    for(size_t c=1; c<=C; ++c) {
+      for(size_t g=1; g<=G; ++g) {
+        hf::Executor executor(c, g);
+        hf::Heteroflow heteroflow;
+        for(size_t i=0; i<num_tasks; ++i) {
+          auto ndata= ::rand()%4096 + 1;
+          auto ptr  = new char[ndata];
+          std::fill_n(ptr, ndata, 'a');
+          auto pull = heteroflow.pull(ptr, ndata);
+          auto madd = heteroflow.kernel(
+            (ndata+255)/256, 256, 0, k_add<char>, pull, ndata, 1
+          );
+          auto push = heteroflow.push(pull, ptr, ndata);
+          auto host = heteroflow.host([=](){
+            for(auto j=0; j<ndata; j++) {
+              REQUIRE(ptr[j] == 'b');
+            }
+            delete [] ptr;
+          });
+          pull.precede(madd);
+          madd.precede(push);
+          push.precede(host);
+        }
+        executor.run(heteroflow).wait();
+      }
+    }
+  }
+}
+
+// --------------------------------------------------------
+// Testcase: gpu-transfer
+// --------------------------------------------------------
+TEST_CASE("gpu-transfer" * doctest::timeout(300)) {
+  
+  SUBCASE("without-offset") {
+    for(size_t c=1; c<=C; ++c) {
+      for(size_t g=1; g<=G; ++g) {
+        hf::Executor executor(c, g);
+        hf::Heteroflow heteroflow;
+        for(size_t i=0; i<100; ++i) {
+          auto ndata = ::rand()%4096 + 1;
+          auto data  = new char[ndata];
+          auto pull1 = heteroflow.pull(nullptr, ndata, 'a');
+          auto pull2 = heteroflow.pull(nullptr, ndata, 'b');
+          auto kadd1 = heteroflow.kernel(
+            (ndata + 255)/256, 256, 0, k_add<char>, pull1, ndata, 1
+          );
+          auto kadd2 = heteroflow.kernel(
+            (ndata + 255)/256, 256, 0, k_add<char>, pull2, ndata, 1
+          );
+          auto trans = heteroflow.transfer(
+            pull1, pull2, 0, 0, ndata
+          );
+          auto push1 = heteroflow.push(pull1, data, ndata);
+          auto test1 = heteroflow.host([data, ndata](){
+            for(int i=0; i<ndata; ++i) {
+              REQUIRE(data[i] == 'c');
+            }
+            delete [] data;
+          });
+          
+          pull1.precede(kadd1);
+          pull2.precede(kadd2);
+          trans.succeed(kadd1, kadd2)
+               .precede(push1);
+          push1.precede(test1);
+        }
+        executor.run(heteroflow).wait();
+      }
+    }
+  }
+  
+  SUBCASE("with-offset") {
+    for(size_t c=1; c<=C; ++c) {
+      for(size_t g=1; g<=G; ++g) {
+        hf::Executor executor(c, g);
+        hf::Heteroflow heteroflow;
+        for(size_t i=0; i<1024; ++i) {
+          auto ndata = ::rand()%4096 + 1;
+          auto offs1 = ::rand()%ndata;
+          auto offs2 = ::rand()%ndata;
+          auto togo  = std::min(ndata-offs1, ndata-offs2);
+          auto data  = new char[ndata];
+          auto pull1 = heteroflow.pull(nullptr, ndata, 'a');
+          auto pull2 = heteroflow.pull(nullptr, ndata, 'b');
+          auto kadd1 = heteroflow.kernel(
+            (ndata + 255)/256, 256, 0, k_add<char>, pull1, ndata, 1
+          );
+          auto kadd2 = heteroflow.kernel(
+            (ndata + 255)/256, 256, 0, k_add<char>, pull2, ndata, 1
+          );
+          auto trans = heteroflow.transfer(
+            pull1, pull2, offs1, offs2, togo
+          );
+          auto push1 = heteroflow.push(pull1, data, ndata);
+          auto test1 = heteroflow.host([=](){
+            for(int i=0; i<offs1; ++i) {
+              REQUIRE(data[i] == 'b');
+            }
+            for(int i=offs1; i<offs1+togo; ++i) {
+              REQUIRE(data[i] == 'c');
+            }
+            for(int i=offs1+togo; i<ndata; ++i) {
+              REQUIRE(data[i] == 'b');
+            }
+            delete [] data;
+          });
+          
+          pull1.precede(kadd1);
+          pull2.precede(kadd2);
+          trans.succeed(kadd1, kadd2)
+               .precede(push1);
+          push1.precede(test1);
+        }
+        executor.run(heteroflow).wait();
+      }
+    }
+  }
+}
+
+// --------------------------------------------------------
+// Testcase: state-transition
+// --------------------------------------------------------
+TEST_CASE("statefulness" * doctest::timeout(300)) {
+
+  SUBCASE("linear-chain") {
+    for(size_t c=1; c<=C; ++c) {
+      for(size_t g=1; g<=G; ++g) {
+        hf::Executor executor(c, g);
+        hf::Heteroflow heteroflow;
+
+        std::vector<char> vec;
+        size_t size = 0;
+        char* data = nullptr;
+        dim3 grid, block;
+
+        auto host = heteroflow.host([&](){
+          size = 1234567;
+          vec.resize(size, 'a');
+          data = vec.data();
+          grid = (size+255)/256;
+          block = 256;
+        });
+        auto pull = heteroflow.pull(std::ref(data), std::ref(size));
+        auto kadd = heteroflow.kernel(
+          std::ref(grid), std::ref(block), 0, k_add<char>, pull, std::ref(size), 1
+        );
+        auto push = heteroflow.push(pull, std::ref(data), std::ref(size));
+        auto test = heteroflow.host([&](){
+          REQUIRE(size == vec.size());
+          REQUIRE(data == vec.data());
+          REQUIRE(grid.x == (size+255)/256);
+          REQUIRE(block.x == 256);
+          for(auto i : vec) {
+            REQUIRE(i == 'b');
+          }
+        });
+
+        host.precede(pull);
+        pull.precede(kadd);
+        kadd.precede(push);
+        push.precede(test);
+
+        executor.run(heteroflow).wait();
+      }
+    }
+  }
+}
+
+
+

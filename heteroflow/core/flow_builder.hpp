@@ -68,17 +68,26 @@ class FlowBuilder {
     /**
     @brief creates a kernel task that launches a given kernel 
 
-    @tparam ArgsT... argument types
-
+    @tparam G grid type
+    @tparam B block type
+    @tparam S shared memory size type
+    @tparam F kernel function type
+    @tparam ArgsT... kernel function argument types
+    
+    @param grid argument to construct a grid of type dim3
+    @param block argument to construct a block of type dim3
+    @param shm argument to construct a shared memory size of type size_t
     @param func kernel function
     @param args... arguments to forward to the kernel function
 
     @return KernelTask handle
 
-    The function performs default configuration to launch the kernel.
+    Creates a kernel task that executes a kernel function with a configuration
     */
-    template <typename F, typename... ArgsT>
-    KernelTask kernel(F&& func, ArgsT&&... args);
+    template <typename G, typename B, typename S, typename F, typename... ArgsT>
+    KernelTask kernel(
+      G&& grid, B&& block, S&& shm, F&& func, ArgsT&&... args
+    );
 
 
     template <typename... ArgsT>
@@ -171,8 +180,10 @@ TransferTask FlowBuilder::transfer(PullTask source, PullTask target, ArgsT&&... 
 
 
 // Function: kernel    
-template <typename F, typename... ArgsT>
-KernelTask FlowBuilder::kernel(F&& func, ArgsT&&... args) {
+template <typename G, typename B, typename S, typename F, typename... ArgsT>
+KernelTask FlowBuilder::kernel(
+  G&& g, B&& b, S&&s, F&& func, ArgsT&&... args
+) {
   
   static_assert(
     function_traits<F>::arity == sizeof...(args), 
@@ -183,8 +194,13 @@ KernelTask FlowBuilder::kernel(F&& func, ArgsT&&... args) {
     nonstd::in_place_type_t<Node::Kernel>{}
   ));
 
-  return KernelTask(_graph.back().get())
-        .kernel(std::forward<F>(func), std::forward<ArgsT>(args)...);
+  return KernelTask(_graph.back().get()).kernel(
+    std::forward<G>(g),
+    std::forward<B>(b),
+    std::forward<S>(s),
+    std::forward<F>(func), 
+    std::forward<ArgsT>(args)...
+  );
 }
 
 // Procedure: clear

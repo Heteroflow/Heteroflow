@@ -151,7 +151,10 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${HF_UTEST_DIR})
 add_executable(basics unittests/basics.cu)
 target_link_libraries(basics ${CUDA_LIBRARIES} ${PROJECT_NAME})
 target_include_directories(basics PRIVATE ${HF_THIRD_PARTY_DIR}/doctest)
-add_test(cpu-tasks ${HF_UTEST_DIR}/basics -tc=cpu-tasks)
+add_test(host-tasks ${HF_UTEST_DIR}/basics -tc=host-tasks)
+add_test(gpu-memset ${HF_UTEST_DIR}/basics -tc=gpu-memset)
+add_test(gpu-transfer ${HF_UTEST_DIR}/basics -tc=gpu-transfer)
+add_test(statefulness ${HF_UTEST_DIR}/basics -tc=statefulness)
 
 endif()
 
