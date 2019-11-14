@@ -31,34 +31,40 @@ __global__ void saxpy(int n, float a, float *x, float *y) {
 
 int main(void) {
 
-  const int num_items = 1<<20;                    // total items
-  const int num_bytes = num_items*sizeof(float);  // total bytes
+  const int items = 1<<20;                // total items
+  const int bytes = items*sizeof(float);  // total bytes
   float* x {nullptr};
   float* y {nullptr};
 
-  hf::Executor executor;                          // create an executor
-  hf::Heteroflow hf("saxpy");                     // create a task dependency graph 
+  hf::Executor executor;                  // create an executor
+  hf::Heteroflow hf("saxpy");             // create a task dependency graph 
+  
+  auto host_x = hf.host([&]{ x = create_vector(N, 1.0f); }).name("create_x");
+  auto host_y = hf.host([&]{ y = create_vector(N, 2.0f); }).name("create_y"); 
+  auto pull_x = hf.pull(std::ref(x), B).name("pull_x");
+  auto pull_y = hf.pull(std::ref(y), B).name("pull_y");
+  auto kernel = hf.kernel((N+255)/256, 256, 0, saxpy, N, 2.0f, pull_x, pull_y)
+                  .name("saxpy");
+  auto push_x = hf.push(pull_x, std::ref(x), B).name("push_x");
+  auto push_y = hf.push(pull_y, std::ref(y), B).name("push_y");
+  auto verify = hf.host([&]{ verify_result(x, y, N); }).name("verify");
+  auto kill_x = hf.host([&]{ delete_vector(x); }).name("delete_x");
+  auto kill_y = hf.host([&]{ delete_vector(y); }).name("delete_y");
 
-  auto host_x = hf.host([&](){ x = new float[num_items]; std::fill_n(x, num_items, 1.0f); });
-  auto host_y = hf.host([&](){ y = new float[num_items]; std::fill_n(y, num_items, 2.0f); });
-  auto pull_x = hf.pull(std::ref(x), num_bytes); 
-  auto pull_y = hf.pull(std::ref(y), num_bytes);           
-  auto kernel = hf.kernel((num_items+255)/256, 256, 0, saxpy, num_items, 2.0f, pull_x, pull_y);
-  auto push_x = hf.push(pull_x, std::ref(x));
-  auto push_y = hf.push(pull_y, std::ref(y));
+  host_x.precede(pull_x);                 // host tasks run before pull tasks
+  host_y.precede(pull_y);
+  kernel.precede(push_x, push_y)          // kernel runs before/after push/pull tasks
+        .succeed(pull_x, pull_y); 
+  verify.precede(kill_x, kill_y)          // verifier runs before/after kill/push tasks
+        .succeed(push_x, push_y); 
 
-  host_x.precede(pull_x);                         // host_x runs before pull_x
-  host_y.precede(pull_y);                         // host_y runs before pull_y
-  kernel.precede(push_x, push_y)                  // kernel runs before push_x and push_y
-        .succeed(pull_x, pull_y);                 // kernel runs after  pull_x and pull_Y
-
-  executor.run(hf).wait();                        // execute the task dependency graph
+  executor.run(hf).wait();                // execute the task dependency graph
 }
 ```
 
 The saxpy task dependency graph is shown in the following figure:
 
-<img src="images/saxpy.png" width="65%">
+![SaxpyTaskGraph](images/saxpy.png)
 
 
 Compile and run the code with the following commands:
@@ -116,37 +122,22 @@ for each byte of the memory.
 hf::PullTask gpu_mem1 = heteroflow.pull(nullptr, 256);
 hf::PullTask gpu_mem2 = heteroflow.pull(nullptr, 256, 0); 
 ```
-
-The arguments to pass to `Heteroflow::pull` can be *stateful*,
-in which variables are captured by reference through [std::ref][std::ref].
-Stateful capture is useful for variables that cannot decide 
-values until runtime,
-or that take advantage of host tasks to modify values for 
-task parallelism.
-
-```cpp
-float* runtime_data{nullptr};
-size_t size{0}, bytes{0};
-hf::HostTask host = heteroflow.host([&](){      // capture everything by reference
-  runtime_data = new float[size=100];           // change size and data at runtime
-  bytes = size*sizeof(float);
-});
-hf::PullTask stateful_pull = heteroflow.pull(std::ref(runtime_data), std::ref(bytes));
-```
  
 ### Push Task
 
-A push task copies GPU data associated with a pull task back to a host memory area.
+A push task copies GPU data in a pull task back to a host memory area.
 
 ```cpp
-// using the pull and data example above
 hf::PushTask push = heteroflow.push(pull, data, 10*sizeof(float));
 ```
 
-You can give an *offset* in bytes to change the beginning point of the memory block in the pull task.
+You can give an *offset* in bytes to indicate the starting point
+of the push operation.
+The code snippet below skips the first three floats and
+copies the remaining seven floats from a memory block of a pull task
+to a host memory area pointed by data.
 
 ```cpp
-// skips the first 3 floats in the gpu memory block of pull
 hf::PushTask push = heteroflow.push(pull, data, 3*sizeof(float), 7*sizeof(float))
 ```
 
@@ -155,9 +146,8 @@ hf::PushTask push = heteroflow.push(pull, data, 3*sizeof(float), 7*sizeof(float)
 A kernel task offloads a kernel function to a GPU device.
 Heteroflow abstracts GPU memory through pull tasks 
 to perform automatic device mapping and memory allocation at runtime.
-Having said that, 
-each pull task can convert to a pointer of whatever data type specified 
-in the kernel function.
+Each pull task will implicitly convert to the pointer type in the corresponding
+argument entry of the kernel function.
 
 ```cpp
 __global__ void my_kernel(float* data, int N);
@@ -225,8 +215,38 @@ executor.wait_for_all();  // block until all associated tasks finish
 Notice that executor does not own any heteroflow. 
 It is your responsibility to keep a heteroflow alive during its execution,
 or it can result in undefined behavior.
-In most applications, you need only one executor to run multiple hteroflows
+In most applications, you need only one executor to run multiple heteroflows
 each representing a specific part of your parallel decomposition.
+
+## Stateful Execution
+
+Heteroflow leverages modern C++ meta-programming 
+to let users capture variables in reference through [std::ref][std::ref].
+for *stateful* execution.
+Maintaining state transitions of variables enables flexible runtime controls 
+and fine-grained task parallelism.
+Users can partition a large workload into small parallel blocks and append
+dependencies between tasks to keep variable states consistent.
+Below the code snippet uses a host task to allocate a memory block.
+The change on `data` and `size` will be visible to the execution
+context of the succeeding pull task.
+
+```cpp
+float* data{nullptr};
+size_t size{0};
+
+auto host = heteroflow.host([&](){      // captures everything by reference
+  data = new float[100];                // changes size and data at runtime
+  size = 100*sizeof(float);
+});
+
+auto pull = heteroflow.pull(std::ref(data), std::ref(size))
+                      .succeed(host);
+```
+
+The variables to forward to other tasks can be made stateful
+in a similar fashion.
+
 
 # System Requirements
 
@@ -243,8 +263,6 @@ Heteroflow is licensed under the [MIT License](./LICENSE).
 [span::data]:            https://en.cppreference.com/w/cpp/container/span/data
 [std::invoke]:           https://en.cppreference.com/w/cpp/utility/functional/invoke
 [std::future]:           https://en.cppreference.com/w/cpp/thread/future
-
-
 [cuda-zone]:             https://developer.nvidia.com/cuda-zone
 [nvcc]:                  https://developer.nvidia.com/cuda-llvm-compiler
 

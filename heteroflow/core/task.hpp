@@ -522,8 +522,8 @@ class PushTask : public TaskBase<PushTask> {
     template <typename P, typename N>
     PushTask push(PullTask, P&&, N&&);
    
-    template <typename P, typename N, typename O>
-    PushTask push(PullTask, P&& p, N&& n, O&& offset);
+    template <typename P, typename O, typename N>
+    PushTask push(PullTask, P&& p, O&& offset, N&& n);
 
   private:
 
@@ -563,8 +563,8 @@ PushTask PushTask::push(PullTask source, P&& p, N&& n) {
 }
 
 // Function: push
-template <typename P, typename N, typename O>
-PushTask PushTask::push(PullTask source, P&& p, N&& n, O&& offset) {
+template <typename P, typename O, typename N>
+PushTask PushTask::push(PullTask source, P&& p, O&& o, N&& n) {
 
   HF_THROW_IF(!_node,  "push task can't be empty");
   HF_THROW_IF(!source, "pull task can't be empty");
@@ -574,12 +574,12 @@ PushTask PushTask::push(PullTask source, P&& p, N&& n, O&& offset) {
   h.source = source._node;
 
   h.work = [
-    task   = *this, 
-    ptr    = std::forward<P>(p), 
-    size   = std::forward<N>(n), 
-    offset = std::forward<O>(offset)
+    t = *this, 
+    p = std::forward<P>(p), 
+    o = std::forward<O>(o),
+    n = std::forward<N>(n) 
   ] (cudaStream_t stream) mutable {
-    task._invoke_push(ptr, size, offset, stream);
+    t._invoke_push(p, o, n, stream);
   };
 
   return *this;
@@ -588,7 +588,7 @@ PushTask PushTask::push(PullTask source, P&& p, N&& n, O&& offset) {
 // Procedure: _invoke_push
 template <typename P>
 void PushTask::_invoke_push(
-  P &&h_data, size_t h_size, size_t offset, cudaStream_t stream
+  P &&h_data, size_t offset, size_t h_size, cudaStream_t stream
 ) {
   // get the handle and device memory
   auto& h = _node->_push_handle();
