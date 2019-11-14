@@ -251,10 +251,9 @@ each representing a specific part of your parallel decomposition.
 
 ## Stateful Execution
 
-Heteroflow leverages modern C++ meta-programming 
-to let users capture variables in reference through [std::ref][std::ref]
-for *stateful* execution
-that enables flexible runtime controls and fine-grained task parallelism.
+Heteroflow allows users to capture variables in reference through [std::ref][std::ref]
+for *stateful* execution,
+enabling flexible runtime controls and fine-grained task parallelism.
 Users can partition a large workload into small parallel blocks and append
 dependencies between tasks to keep variable states consistent.
 Below the code snippet demonstrates this concept.
