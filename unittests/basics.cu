@@ -102,7 +102,42 @@ TEST_CASE("host-tasks" * doctest::timeout(300)) {
       REQUIRE(heteroflow.num_nodes() == 200);
     }
   }
-  
+
+  SUBCASE("ParallelFor") {
+    for(size_t W=1; W<=C; ++W) {
+      hf::Executor executor(W);
+
+      // Range for
+      for(size_t i=0; i<num_tasks; i++) {
+        hf::Heteroflow heteroflow;
+        std::atomic<int> counter{0};
+        auto N = ::rand() % 4098 + 1;
+        std::vector<int> vec(N, 20);
+        heteroflow.parallel_for(vec.begin(), vec.end(), [&](int i){
+          counter += i;
+        });
+        executor.run(heteroflow).wait();
+        auto res = std::accumulate(vec.begin(), vec.end(), 0, std::plus<int>());
+        REQUIRE(counter == res);
+      }
+
+      // Index for
+      for(size_t i=0; i<num_tasks; i++) {
+        std::atomic<int> counter{0};
+        hf::Heteroflow heteroflow;
+        auto N = ::rand() % 4098 + 1;
+        auto S = std::min(::rand()%10, N) + 1;
+        heteroflow.parallel_for(0, N, S, [&](int){ ++counter; });
+        executor.run(heteroflow).wait();
+        auto res = 0;
+        for(auto i=0; i<N; i+=S) {
+          ++res;
+        }
+        REQUIRE(counter == res);
+      }
+    }
+  }
+
   SUBCASE("BinarySequence"){
     for(size_t W=1; W<=C; ++W) {
       hf::Executor executor(W);

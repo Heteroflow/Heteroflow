@@ -99,7 +99,44 @@ class FlowBuilder {
     @brief queries the number of nodes
     */
     bool empty() const;
+    
+    /**
+    @brief constructs a task dependency graph of range-based parallel_for
+    
+    The task dependency graph applies a callable object 
+    to the dereferencing of every iterator 
+    in the range [beg, end) one by one.
 
+    @tparam I input iterator type
+    @tparam C callable type
+
+    @param beg iterator to the beginning (inclusive)
+    @param end iterator to the end (exclusive)
+    @param c a callable object to be applied to 
+
+    @return a pair of Task handles to the beginning and the end of the graph
+    */
+    template <typename I, typename C>
+    std::pair<HostTask, HostTask> parallel_for(I beg, I end, C&& c);
+    
+    /**
+    @brief constructs a task dependency graph of range-based parallel_for
+    
+    The task dependency graph applies a callable object 
+    to each indexed item in the range [beg, end) one by one.
+
+    @tparam I input iterator type
+    @tparam C callable type
+
+    @param beg iterator to the beginning (inclusive)
+    @param end iterator to the end (exclusive)
+    @param step step between successive iterations
+    @param c a callable object to be applied to 
+
+    @return a pair of Task handles to the beginning and the end of the graph
+    */
+    template <typename I, typename C>
+    std::pair<HostTask, HostTask> parallel_for(I beg, I end, I step, C&& c);
 
   private:
 
@@ -192,6 +229,52 @@ inline size_t FlowBuilder::num_nodes() const {
 inline bool FlowBuilder::empty() const {
   return _graph.empty();
 }
+
+// Function: parallel_for
+template <typename I, typename C>
+std::pair<HostTask, HostTask> FlowBuilder::parallel_for(I beg, I end, C&& c) {
+  
+  auto S = placeholder<HostTask>();
+  auto T = placeholder<HostTask>();
+  
+  while(beg != end) {
+    auto task = host([itr=beg, c] () mutable {
+      c(*itr);
+    });
+    S.precede(task);
+    ++beg;
+  }
+
+  if(S.num_successors() == 0) {
+    S.precede(T);
+  }
+  
+  return std::make_pair(S, T); 
+
+}
+
+// Function: parallel_for
+template <typename I, typename C>
+std::pair<HostTask, HostTask> FlowBuilder::parallel_for(I beg, I end, I s, C&& c){
+
+  auto S = placeholder<HostTask>();
+  auto T = placeholder<HostTask>();
+
+  for(auto i=beg; i<end; i+=s) {
+    auto task = host([i, c] () mutable {
+      c(i);
+    });
+    S.precede(task);
+    task.precede(T);
+  }
+
+  if(S.num_successors() == 0) {
+    S.precede(T);
+  }
+  
+  return std::make_pair(S, T); 
+}
+
 
 }  // end of namespace hf -----------------------------------------------------
 

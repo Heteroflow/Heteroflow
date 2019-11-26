@@ -35,9 +35,9 @@ class Node {
   struct Pull {
     Pull() = default;
     std::function<void(cuda::Allocator&, cudaStream_t)> work;
-    int              device {-1};
-    void*            d_data {nullptr};
-    size_t           d_size {0};
+    int device {-1};
+    void* d_data {nullptr};
+    size_t d_size {0};
   };  
   
   // Push data

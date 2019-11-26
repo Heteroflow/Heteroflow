@@ -132,6 +132,16 @@ class Executor {
     size_t num_workers() const;
     
     /**
+    @brief queries the number of cpu workers
+    */
+    size_t num_cpu_workers() const;
+    
+    /**
+    @brief queries the number of gpu workers
+    */
+    size_t num_gpu_workers() const;
+    
+    /**
     @brief queries the number of gpu devices
     */
     size_t num_devices() const;
@@ -163,10 +173,9 @@ class Executor {
 
     std::atomic<size_t> _num_cpu_actives {0};
     std::atomic<size_t> _num_gpu_actives {0};
-
     std::atomic<size_t> _num_cpu_thieves {0};
     std::atomic<size_t> _num_gpu_thieves {0};
-    std::atomic<bool>   _done        {0};
+    std::atomic<bool>   _done {0};
 
     Notifier _cpu_notifier;
     Notifier _gpu_notifier;
@@ -239,6 +248,8 @@ inline Executor::Executor(unsigned N, unsigned M) :
   auto num_devices = cuda::num_devices();
   HF_THROW_IF(num_devices < M, "max device count is ", num_devices);
 
+  // TODO: create streams on device ?
+
   // set up the workers
   _spawn();
 }
@@ -266,6 +277,16 @@ inline Executor::~Executor() {
 // Function: num_workers
 inline size_t Executor::num_workers() const {
   return _cpu_workers.size() + _gpu_workers.size();
+}
+
+// Function: num_cpu_workers
+inline size_t Executor::num_cpu_workers() const {
+  return _cpu_workers.size();
+}
+
+// Function: num_gpu_workers
+inline size_t Executor::num_gpu_workers() const {
+  return _gpu_workers.size();
 }
 
 // Function: num_devices
@@ -520,11 +541,17 @@ inline bool Executor::_wait_for_cpu_task(unsigned me, nstd::optional<Node*>& t) 
 
 // Procedure: _invoke_host
 inline void Executor::_invoke_host(unsigned, Node::Host& h) {
+  if(!h.work) {
+    return;
+  }
   h.work();
 }
 
 // Procedure: _invoke_push
 inline void Executor::_invoke_push(unsigned me, Node::Push& h, int d) {
+  if(!h.work) {
+    return;
+  }
   //auto d = h.source->_pull_handle().device;
   auto s = _gpu_workers[me].streams[d];
   //auto e = _gpu_workers[me].events[d];
@@ -545,6 +572,9 @@ inline void Executor::_invoke_push(unsigned me, Node::Push& h, int d) {
 
 // Procedure: _invoke_pull
 inline void Executor::_invoke_pull(unsigned me, Node::Pull& h, int d) {
+  if(!h.work) {
+    return;
+  }
   //auto d = h.device;
   auto s = _gpu_workers[me].streams[d];
   //auto e = _gpu_workers[me].events[d];
@@ -565,6 +595,9 @@ inline void Executor::_invoke_pull(unsigned me, Node::Pull& h, int d) {
 
 // Procedure: _invoke_kernel
 inline void Executor::_invoke_kernel(unsigned me, Node::Kernel& h, int d) {
+  if(!h.work) {
+    return;
+  }
   //auto d = h.device;
   auto s = _gpu_workers[me].streams[d];
   //auto e = _gpu_workers[me].events[d];
@@ -587,6 +620,9 @@ inline void Executor::_invoke_kernel(unsigned me, Node::Kernel& h, int d) {
 
 // Procedure: _invoke_transfer
 inline void Executor::_invoke_transfer(unsigned me, Node::Transfer& h, int d) {
+  if(!h.work) {
+    return;
+  }
   //auto d = h.source->_pull_handle().device;
   auto s = _gpu_workers[me].streams[d];
   //auto e = _gpu_workers[me].events[d];
@@ -1004,7 +1040,7 @@ template<typename P, typename C>
 std::future<void> Executor::run_until(Heteroflow& f, P&& pred, C&& c) {
 
   assert(_cpu_workers.size() > 0);
-  
+
   _increment_topology();
 
   // Special case:
@@ -1017,39 +1053,6 @@ std::future<void> Executor::run_until(Heteroflow& f, P&& pred, C&& c) {
     return promise.get_future();
   }
  
-  /*// Special case of zero workers requires:
-  //  - iterative execution to avoid stack overflow
-  //  - avoid execution of last_work
-  if(_workers.size() == 0 || f.empty()) {
-    
-    Topology tpg(f, std::forward<P>(pred), std::forward<C>(c));
-
-    // Clear last execution data & Build precedence between nodes and target
-    tpg._bind(f._graph);
-
-    std::stack<Node*> stack;
-
-    do {
-      _schedule_unsync(tpg._sources, stack);
-      while(!stack.empty()) {
-        auto node = stack.top();
-        stack.pop();
-        _invoke_unsync(node, stack);
-      }
-      tpg._recover_num_sinks();
-    } while(!std::invoke(tpg._pred));
-
-    if(tpg._call != nullptr) {
-      std::invoke(tpg._call);
-    }
-
-    tpg._promise.set_value();
-    
-    _decrement_topology_and_notify();
-    
-    return tpg._promise.get_future();
-  }*/
-  
   // Multi-threaded execution.
   bool run_now {false};
   Topology* tpg;
@@ -1261,10 +1264,6 @@ inline void Executor::_run_epilogue(Topology* tpg) {
     node->_tree_size = 1;
   }
 }
-
-
-
-
 
 // -------------------------  GPU worker routines -----------------------------
 
