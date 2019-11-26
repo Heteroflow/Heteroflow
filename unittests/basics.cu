@@ -493,5 +493,40 @@ TEST_CASE("statefulness" * doctest::timeout(300)) {
   }
 }
 
+// --------------------------------------------------------
+// Testcase: run_n
+// --------------------------------------------------------
+TEST_CASE("run_n" * doctest::timeout(300)) {
+  
+  SUBCASE("linear-chain") {
+    for(size_t c=1; c<=C; ++c) {
+      for(size_t g=1; g<=G; ++g) {
+        hf::Executor executor(c, g);
+        hf::Heteroflow heteroflow;
+        const size_t ndata = 5000;
+        std::vector<char> vec(ndata, 'a');
+
+        auto pull = heteroflow.pull(vec.data(), ndata);
+        auto kadd = heteroflow.kernel(
+          (ndata + 255)/256, 256, 0, k_add<char>, pull, ndata, 1
+        );
+        auto push = heteroflow.push(vec.data(), pull, ndata);
+
+        pull.precede(kadd);
+        kadd.precede(push);
+        
+        auto res = 'a';
+        for(size_t s=0; s<25; ++s){
+          auto r = ::rand() % 5;
+          res += r;
+          executor.run_n(heteroflow, r).wait();
+          for(auto c : vec) {
+            REQUIRE(c == res);
+          }
+        }
+      }
+    }
+  }
+}
 
 

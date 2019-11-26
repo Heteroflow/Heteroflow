@@ -932,11 +932,11 @@ inline void Executor::_tear_down_topology(Topology* tpg) {
     tpg->_num_sinks = tpg->_cached_num_sinks;
 
     // Reset the device group
-    for(auto &n: tpg->_heteroflow._graph) {
-      if(n->is_device()) {
-        n->_group->device_id = -1;
-      }
-    }
+    //for(auto &n: tpg->_heteroflow._graph) {
+    //  if(n->is_device()) {
+    //    n->_group->device_id = -1;
+    //  }
+    //}
     _schedule(tpg->_sources); 
   }
   // case 2: the final run of this topology

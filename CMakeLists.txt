@@ -155,6 +155,7 @@ add_test(host-tasks ${HF_UTEST_DIR}/basics -tc=host-tasks)
 add_test(gpu-memset ${HF_UTEST_DIR}/basics -tc=gpu-memset)
 add_test(gpu-transfer ${HF_UTEST_DIR}/basics -tc=gpu-transfer)
 add_test(statefulness ${HF_UTEST_DIR}/basics -tc=statefulness)
+add_test(run_n ${HF_UTEST_DIR}/basics -tc=run_n)
 
 endif()
 
