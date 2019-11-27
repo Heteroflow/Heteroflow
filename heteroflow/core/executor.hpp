@@ -1259,8 +1259,6 @@ inline void Executor::_run_epilogue(Topology* tpg) {
   for(auto& node : graph) {
     nstd::visit(visitor{*this}, node->_handle);
     node->_parent = node.get();;
-
-    // TODO: initial value of size should be 1
     node->_tree_size = 1;
   }
 }

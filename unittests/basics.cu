@@ -7,8 +7,8 @@
 // ----------------------------------------------------------------------------
 // Parameters
 // ----------------------------------------------------------------------------
-const size_t C = std::min(32u, std::thread::hardware_concurrency());
-const size_t G = std::min(8u, hf::cuda::num_devices());
+const size_t C = std::min(16u, std::thread::hardware_concurrency());
+const size_t G = std::min(4u, hf::cuda::num_devices());
 
 // ----------------------------------------------------------------------------
 // Kernel
