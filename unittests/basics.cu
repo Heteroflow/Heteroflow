@@ -498,32 +498,45 @@ TEST_CASE("statefulness" * doctest::timeout(300)) {
 // --------------------------------------------------------
 TEST_CASE("run_n" * doctest::timeout(300)) {
   
-  SUBCASE("linear-chain") {
-    for(size_t c=1; c<=C; ++c) {
-      for(size_t g=1; g<=G; ++g) {
-        hf::Executor executor(c, g);
-        hf::Heteroflow heteroflow;
-        const size_t ndata = 5000;
-        std::vector<char> vec(ndata, 'a');
+  for(size_t c=1; c<=C; ++c) {
+    for(size_t g=1; g<=G; ++g) {
 
-        auto pull = heteroflow.pull(vec.data(), ndata);
+      std::atomic<size_t> counter{0};
+
+      hf::Executor executor(c, g);
+      hf::Heteroflow heteroflow;
+      const size_t ndata = 5000;
+
+      for(size_t n=0; n<2*G; ++n) {
+        std::vector<char> vec(ndata);
+        auto data = vec.data();
+        
+        auto host = heteroflow.host([vec=std::move(vec)]() mutable {
+          for(auto& c : vec) c = 0;
+        }); 
+        auto pull = heteroflow.pull(data, ndata);
         auto kadd = heteroflow.kernel(
           (ndata + 255)/256, 256, 0, k_add<char>, pull, ndata, 1
         );
-        auto push = heteroflow.push(vec.data(), pull, ndata);
-
+        auto push = heteroflow.push(data, pull, ndata);
+        auto combine = heteroflow.host([&counter, data, ndata] () {
+          for(size_t i=0; i<ndata; ++i) {
+            counter += data[i];
+          }
+        });
+        
+        host.precede(pull);
         pull.precede(kadd);
         kadd.precede(push);
-        
-        auto res = 'a';
-        for(size_t s=0; s<25; ++s){
-          auto r = ::rand() % 5;
-          res += r;
-          executor.run_n(heteroflow, r).wait();
-          for(auto c : vec) {
-            REQUIRE(c == res);
-          }
-        }
+        push.precede(combine);
+      }
+      
+      auto res = 0;
+      for(size_t s=0; s<25; ++s){
+        auto r = ::rand() % 5;
+        res += r;
+        executor.run_n(heteroflow, r).wait();
+        REQUIRE(counter == res*ndata*2*G);
       }
     }
   }
