@@ -26,14 +26,17 @@ class Executor {
     std::mt19937 rdgen { std::random_device{}() };
     WorkStealingQueue<Node*> cpu_queue;
     WorkStealingQueue<Node*> gpu_queue;
-
     Node* cache {nullptr};
-    std::vector<cudaStream_t> streams;
-    // TODO: comment ALL events 
-    //std::vector<cudaEvent_t> events;
   };
     
   struct PerThread {
+
+    enum Type {
+      FREE_STANDING = 0,
+      CPU_WORKER,
+      GPU_WORKER
+    };
+
     Executor* pool {nullptr}; 
     int worker_id  {-1};
     bool gpu_thread {false};
@@ -42,6 +45,7 @@ class Executor {
   struct Device {
     cuda::Allocator allocator;
     std::atomic<int> load {0};
+    std::vector<cudaStream_t> streams;
   };
 
   public:
@@ -142,11 +146,6 @@ class Executor {
     size_t num_gpu_workers() const;
     
     /**
-    @brief queries the number of gpu devices
-    */
-    size_t num_devices() const;
-    
-    /**
     @brief wait for all pending graphs to complete
     */
     void wait_for_all();
@@ -156,17 +155,17 @@ class Executor {
     std::condition_variable _topology_cv;
     std::mutex _topology_mutex;
     std::mutex _queue_mutex;
+    std::mutex _gpu_load_mtx;
 
     unsigned _num_topologies {0};
     
     // scheduler field
     std::vector<Worker> _cpu_workers;
-    std::vector<Notifier::Waiter> _cpu_waiters;
-    std::vector<std::thread> _cpu_threads;
-
     std::vector<Worker> _gpu_workers;
-    std::vector<Notifier::Waiter> _gpu_waiters;
+    std::vector<std::thread> _cpu_threads;
     std::vector<std::thread> _gpu_threads;
+    std::vector<Notifier::Waiter> _cpu_waiters;
+    std::vector<Notifier::Waiter> _gpu_waiters;
 
     WorkStealingQueue<Node*> _cpu_queue;
     WorkStealingQueue<Node*> _gpu_queue;
@@ -180,22 +179,20 @@ class Executor {
     Notifier _cpu_notifier;
     Notifier _gpu_notifier;
 
-    std::vector<Device> _devices;
+    std::vector<Device> _gpu_devices;
 
-    std::mutex _gpu_load_mtx;
-    
     PerThread& _per_thread() const;
 
-    bool _wait_for_cpu_task(unsigned me, nstd::optional<Node*>&);
-    void _exploit_cpu_task(unsigned, nstd::optional<Node*>&);
-    void _explore_cpu_task(unsigned, nstd::optional<Node*>&);
-
-    bool _wait_for_gpu_task(unsigned me, nstd::optional<Node*>&);
-    void _exploit_gpu_task(unsigned, nstd::optional<Node*>&);
-    void _explore_gpu_task(unsigned, nstd::optional<Node*>&);
-
-    void _spawn();
-
+    bool _wait_for_cpu_tasks(unsigned me, nstd::optional<Node*>&);
+    bool _wait_for_gpu_tasks(unsigned me, nstd::optional<Node*>&);
+    
+    void _exploit_cpu_tasks(unsigned, nstd::optional<Node*>&);
+    void _explore_cpu_tasks(unsigned, nstd::optional<Node*>&);
+    void _exploit_gpu_tasks(unsigned, nstd::optional<Node*>&);
+    void _explore_gpu_tasks(unsigned, nstd::optional<Node*>&);
+    void _spawn_cpu_workers();
+    void _spawn_gpu_workers();
+    void _prepare_gpus();
     void _create_streams(unsigned);
     void _remove_streams(unsigned);
     void _schedule(Node*, bool);
@@ -242,16 +239,18 @@ inline Executor::Executor(unsigned N, unsigned M) :
   _gpu_workers  {M},
   _gpu_waiters  {M},
   _gpu_notifier {_gpu_waiters}, 
-  _devices {M} {
+  _gpu_devices  {M} {
 
   // invalid number
-  auto num_devices = cuda::num_devices();
-  HF_THROW_IF(num_devices < M, "max device count is ", num_devices);
+  auto num_gpus = cuda::num_devices();
+  HF_THROW_IF(num_gpus < M, "max device count is ", num_gpus);
 
-  // TODO: create streams on device ?
+  // prepare_gpus
+  _prepare_gpus();
 
   // set up the workers
-  _spawn();
+  _spawn_cpu_workers();
+  _spawn_gpu_workers();
 }
 
 // Destructor
@@ -289,29 +288,29 @@ inline size_t Executor::num_gpu_workers() const {
   return _gpu_workers.size();
 }
 
-// Function: num_devices
-inline size_t Executor::num_devices() const {
-  return _devices.size();
-}
-
 // Function: _per_thread
 inline Executor::PerThread& Executor::_per_thread() const {
   thread_local PerThread pt;
   return pt;
 }
 
+// Procedure: _prepare_gpus
+inline void Executor::_prepare_gpus() {
+  for(auto& d : _gpu_devices) {
+    d.streams.resize(num_gpu_workers());
+  }
+}
+
 // Procedure: _create_streams
 inline void Executor::_create_streams(unsigned i) {      
 
-  auto& w = _gpu_workers[i];
-
   // per-thread gpu storage
-  w.streams.resize(_devices.size());
-  //w.events .resize(_devices.size());
+  //w.streams.resize(_gpu_devices.size());
+  //w.events .resize(_gpu_devices.size());
 
-  for(unsigned d=0; d<_devices.size(); ++d) {
+  for(unsigned d=0; d<_gpu_devices.size(); ++d) {
     HF_WITH_CUDA_CTX(d) {
-      HF_CHECK_CUDA(cudaStreamCreate(&w.streams[d]), 
+      HF_CHECK_CUDA(cudaStreamCreate(&_gpu_devices[d].streams[i]), 
         "failed to create stream ", i, " on device ", d
       );
       //HF_CHECK_CUDA(cudaEventCreate(&w.events[d]),
@@ -324,14 +323,12 @@ inline void Executor::_create_streams(unsigned i) {
 // Procedure: _remove_streams
 inline void Executor::_remove_streams(unsigned i) {
 
-  auto& w = _gpu_workers[i];
-
-  for(unsigned d=0; d<_devices.size(); ++d) {
+  for(unsigned d=0; d<_gpu_devices.size(); ++d) {
     HF_WITH_CUDA_CTX(d) {
-      HF_CHECK_CUDA(cudaStreamSynchronize(w.streams[d]), 
+      HF_CHECK_CUDA(cudaStreamSynchronize(_gpu_devices[d].streams[i]), 
         "failed to sync stream ", i, " on device ", d
       );
-      HF_CHECK_CUDA(cudaStreamDestroy(w.streams[d]), 
+      HF_CHECK_CUDA(cudaStreamDestroy(_gpu_devices[d].streams[i]), 
         "failed to destroy stream ", i, " on device ", d
       );
       //HF_CHECK_CUDA(cudaEventDestroy(w.events[d]),
@@ -341,8 +338,8 @@ inline void Executor::_remove_streams(unsigned i) {
   }
 }
 
-// Procedure: _spawn
-inline void Executor::_spawn() {
+// Procedure: _spawn_cpu_workers
+inline void Executor::_spawn_cpu_workers() {
   for(unsigned i=0; i<_cpu_workers.size(); ++i) {
     _cpu_threads.emplace_back([this] (unsigned i) -> void {
 
@@ -358,17 +355,20 @@ inline void Executor::_spawn() {
       while(1) {
         
         // execute the tasks.
-        _exploit_cpu_task(i, t);
+        _exploit_cpu_tasks(i, t);
 
         // wait for tasks
-        if(_wait_for_cpu_task(i, t) == false) {
+        if(_wait_for_cpu_tasks(i, t) == false) {
           break;
         }
       }
       
     }, i);     
   }
+}
 
+// Procedure: _spawn_gpu_workers
+inline void Executor::_spawn_gpu_workers() {
   for(unsigned i=0; i<_gpu_workers.size(); ++i) {
     _gpu_threads.emplace_back([this] (unsigned i) -> void {
 
@@ -387,10 +387,10 @@ inline void Executor::_spawn() {
       while(1) {
         
         // execute the tasks.
-        _exploit_gpu_task(i, t);
+        _exploit_gpu_tasks(i, t);
 
         // wait for tasks
-        if(_wait_for_gpu_task(i, t) == false) {
+        if(_wait_for_gpu_tasks(i, t) == false) {
           break;
         }
       }    
@@ -400,11 +400,10 @@ inline void Executor::_spawn() {
 
     }, i);     
   }
-
 }
 
 // Procedure: _exploit_task
-inline void Executor::_exploit_cpu_task(unsigned i, nstd::optional<Node*>& t) {
+inline void Executor::_exploit_cpu_tasks(unsigned i, nstd::optional<Node*>& t) {
   
   assert(!_cpu_workers[i].cache);
 
@@ -430,8 +429,8 @@ inline void Executor::_exploit_cpu_task(unsigned i, nstd::optional<Node*>& t) {
   }
 }
 
-// Function: _explore_cpu_task
-inline void Executor::_explore_cpu_task(unsigned thief, nstd::optional<Node*>& t) {
+// Function: _explore_cpu_tasks
+inline void Executor::_explore_cpu_tasks(unsigned thief, nstd::optional<Node*>& t) {
   
   assert(!t);
 
@@ -473,8 +472,8 @@ inline void Executor::_explore_cpu_task(unsigned thief, nstd::optional<Node*>& t
 
 }
 
-// Function: _wait_for_cpu_task
-inline bool Executor::_wait_for_cpu_task(unsigned me, nstd::optional<Node*>& t) {
+// Function: _wait_for_cpu_tasks
+inline bool Executor::_wait_for_cpu_tasks(unsigned me, nstd::optional<Node*>& t) {
 
   wait_for_task:
 
@@ -484,7 +483,7 @@ inline bool Executor::_wait_for_cpu_task(unsigned me, nstd::optional<Node*>& t) 
 
   explore_task:
 
-  _explore_cpu_task(me, t);
+  _explore_cpu_tasks(me, t);
 
   if(t) {
     if(_num_cpu_thieves.fetch_sub(1) == 1) {
@@ -553,7 +552,7 @@ inline void Executor::_invoke_push(unsigned me, Node::Push& h, int d) {
     return;
   }
   //auto d = h.source->_pull_handle().device;
-  auto s = _gpu_workers[me].streams[d];
+  auto s = _gpu_devices[d].streams[me];
   //auto e = _gpu_workers[me].events[d];
 
   HF_WITH_CUDA_CTX(d) {
@@ -576,14 +575,14 @@ inline void Executor::_invoke_pull(unsigned me, Node::Pull& h, int d) {
     return;
   }
   //auto d = h.device;
-  auto s = _gpu_workers[me].streams[d];
+  auto s = _gpu_devices[d].streams[me];
   //auto e = _gpu_workers[me].events[d];
 
   HF_WITH_CUDA_CTX(d) {
     //HF_CHECK_CUDA(cudaEventRecord(e, s),
     //  "failed to record event ", me, " on device ", d
     //);
-    h.work(_devices[d].allocator, s);
+    h.work(_gpu_devices[d].allocator, s);
     //HF_CHECK_CUDA(cudaStreamWaitEvent(s, e, 0),
     //  "failed to sync event ", me, " on device ", d
     //);
@@ -599,7 +598,7 @@ inline void Executor::_invoke_kernel(unsigned me, Node::Kernel& h, int d) {
     return;
   }
   //auto d = h.device;
-  auto s = _gpu_workers[me].streams[d];
+  auto s = _gpu_devices[d].streams[me];
   //auto e = _gpu_workers[me].events[d];
 
   HF_WITH_CUDA_CTX(d) {
@@ -624,7 +623,7 @@ inline void Executor::_invoke_transfer(unsigned me, Node::Transfer& h, int d) {
     return;
   }
   //auto d = h.source->_pull_handle().device;
-  auto s = _gpu_workers[me].streams[d];
+  auto s = _gpu_devices[d].streams[me];
   //auto e = _gpu_workers[me].events[d];
   HF_WITH_CUDA_CTX(d) {
     //HF_CHECK_CUDA(cudaEventRecord(e, s),
@@ -658,13 +657,13 @@ inline int Executor::_assign_gpu(Node* node) {
       if(id != -1) {
         return id;
       }
-      int min_load = _devices[0].load.load(std::memory_order_relaxed);
+      int min_load = _gpu_devices[0].load.load(std::memory_order_relaxed);
       if(min_load != 0) {
         for(unsigned i=1; i<_gpu_workers.size(); i++) {
-          auto load = _devices[i].load.load(std::memory_order_relaxed);
+          auto load = _gpu_devices[i].load.load(std::memory_order_relaxed);
           if(load == 0) {
             gpu_id = i;
-            _devices[i].load.fetch_add(root->_tree_size, std::memory_order_relaxed);
+            _gpu_devices[i].load.fetch_add(root->_tree_size, std::memory_order_relaxed);
             return i;
           }
 
@@ -675,7 +674,7 @@ inline int Executor::_assign_gpu(Node* node) {
         }   
       }
       gpu_id = min_load_gpu;
-      _devices[min_load_gpu].load.fetch_add(root->_tree_size, std::memory_order_relaxed);
+      _gpu_devices[min_load_gpu].load.fetch_add(root->_tree_size, std::memory_order_relaxed);
     }
     return min_load_gpu;
   }
@@ -701,7 +700,7 @@ inline void Executor::_invoke(unsigned me, bool gpu_thread, Node* node) {
       auto d = h.source->_group->device_id.load();
       assert(d != -1);
       e._invoke_push(me, h, d);
-      //e._devices[d].load.fetch_sub(1, std::memory_order_relaxed);
+      //e._gpu_devices[d].load.fetch_sub(1, std::memory_order_relaxed);
     }
     void operator () (Node::Pull& h) { 
       auto d = e._assign_gpu(node);
@@ -713,7 +712,7 @@ inline void Executor::_invoke(unsigned me, bool gpu_thread, Node* node) {
         auto root = node->_root();
         {
           std::lock_guard<std::mutex> lock(e._gpu_load_mtx);
-          e._devices[d].load.fetch_sub(root->_tree_size, std::memory_order_relaxed);
+          e._gpu_devices[d].load.fetch_sub(root->_tree_size, std::memory_order_relaxed);
         }
         // Recover for next iteration
         node->_group->num_tasks = root->_tree_size;
@@ -729,7 +728,7 @@ inline void Executor::_invoke(unsigned me, bool gpu_thread, Node* node) {
         auto root = node->_root();
         {
           std::lock_guard<std::mutex> lock(e._gpu_load_mtx);
-          e._devices[d].load.fetch_sub(root->_tree_size, std::memory_order_relaxed);
+          e._gpu_devices[d].load.fetch_sub(root->_tree_size, std::memory_order_relaxed);
         }
         // Recover for next iteration
         node->_group->num_tasks = root->_tree_size;
@@ -739,7 +738,7 @@ inline void Executor::_invoke(unsigned me, bool gpu_thread, Node* node) {
       auto d = h.source->_group->device_id.load();
       assert(d != -1);
       e._invoke_transfer(me, h, d);
-      //e._devices[d].load.fetch_sub(1, std::memory_order_relaxed);
+      //e._gpu_devices[d].load.fetch_sub(1, std::memory_order_relaxed);
     }
   };
   
@@ -1052,6 +1051,8 @@ std::future<void> Executor::run_until(Heteroflow& f, P&& pred, C&& c) {
     _decrement_topology_and_notify();
     return promise.get_future();
   }
+
+  // TODO: throw if no workers
  
   // Multi-threaded execution.
   bool run_now {false};
@@ -1177,14 +1178,14 @@ inline void Executor::_run_prologue(Topology* tpg) {
   //int cursor = 0;
   //for(auto& node : graph) {
   //  if(node->is_kernel() || node->is_pull()) {
-  //    assert(_devices.size() != 0);
+  //    assert(_gpu_devices.size() != 0);
   //    auto r = node->_root();
   //    auto d = r->_device();
   //    
   //    // need to assign a new gpu
   //    if(d == -1) {
   //      d = cursor++;
-  //      if(cursor == _devices.size()) {
+  //      if(cursor == _gpu_devices.size()) {
   //        cursor = 0;
   //      }
   //      r->_device(d);
@@ -1215,7 +1216,7 @@ inline void Executor::_transfer_epilogue(Node::Transfer&) {
 inline void Executor::_pull_epilogue(Node::Pull& h) {
   assert(h.device != -1);
   HF_WITH_CUDA_CTX(h.device) {
-    _devices[h.device].allocator.deallocate(h.d_data);
+    _gpu_devices[h.device].allocator.deallocate(h.d_data);
   }
   h.device = -1;
   h.d_data = nullptr;
@@ -1265,8 +1266,8 @@ inline void Executor::_run_epilogue(Topology* tpg) {
 
 // -------------------------  GPU worker routines -----------------------------
 
-// Procedure: _exploit_gpu_task
-inline void Executor::_exploit_gpu_task(unsigned i, nstd::optional<Node*>& t) {
+// Procedure: _exploit_gpu_tasks
+inline void Executor::_exploit_gpu_tasks(unsigned i, nstd::optional<Node*>& t) {
   
   assert(!_gpu_workers[i].cache);
 
@@ -1294,8 +1295,8 @@ inline void Executor::_exploit_gpu_task(unsigned i, nstd::optional<Node*>& t) {
 }
 
 
-// Function: _wait_for_gpu_task
-inline bool Executor::_wait_for_gpu_task(unsigned me, nstd::optional<Node*>& t) {
+// Function: _wait_for_gpu_tasks
+inline bool Executor::_wait_for_gpu_tasks(unsigned me, nstd::optional<Node*>& t) {
 
   wait_for_task:
 
@@ -1305,7 +1306,7 @@ inline bool Executor::_wait_for_gpu_task(unsigned me, nstd::optional<Node*>& t) 
 
   explore_task:
 
-  _explore_gpu_task(me, t);
+  _explore_gpu_tasks(me, t);
 
   if(t) {
     if(_num_gpu_thieves.fetch_sub(1) == 1) {
@@ -1358,8 +1359,8 @@ inline bool Executor::_wait_for_gpu_task(unsigned me, nstd::optional<Node*>& t) 
   return true;
 }
 
-// Function: _explore_gpu_task
-inline void Executor::_explore_gpu_task(unsigned thief, nstd::optional<Node*>& t) {
+// Function: _explore_gpu_tasks
+inline void Executor::_explore_gpu_tasks(unsigned thief, nstd::optional<Node*>& t) {
   
   assert(!t);
 
