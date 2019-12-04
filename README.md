@@ -115,7 +115,7 @@ hf::PullTask pull = heteroflow.pull(data, 10*sizeof(float));
 If the data pointer is given a `nullptr`, 
 the pull task only allocates a GPU memory area of the given bytes.
 In this case, you can give an additional value to initialize 
-for each byte of the memory.
+for *each byte* of the memory.
 
 ```cpp
 hf::PullTask gpu_mem1 = heteroflow.pull(nullptr, 256);
@@ -283,6 +283,35 @@ auto kernel = heteroflow.kernel(std::ref(grid), 256, 0, my_kernel, pull, 1000)
 The variables to forward to other tasks can be made stateful
 in a similar fashion.
 
+# Compile Unit Tests and Examples
+
+Heteroflow uses [CMake](https://cmake.org/) to build examples and unit tests.
+We recommend out-of-source build.
+
+```bash
+~$ cmake --version  # must be at least 3.9 or higher
+~$ mkdir build
+~$ cd build
+~$ cmake ../
+~$ make 
+```
+
+## Unit Tests
+
+We use CMake's testing framework to run all unit tests.
+
+```bash
+~$ make test
+```
+
+## Examples
+
+The folder [examples/](./examples) contains a number of practical CPU-GPU applications and is a great place to learn to use Heteroflow.
+
+| Example |  Description |
+| ------- |  ----------- | 
+| [saxpy.cu](./examples/saxpy.cu) | implements a saxpy (single-precision A·X Plus Y) task graph |
+| [matrix-multiplication.cu](./examples/matrix-multiplication.cu)| implements two matrix multiplication task graphs, with and without GPU |
 
 # System Requirements
 
