@@ -105,7 +105,6 @@ class Node {
     std::atomic<int> _num_dependents {0};
 
     Node* _parent {this};
-    // TODO: use size instead of height, initial size value should be 1
     int   _tree_size {1};
 
 		// Kernels in a group will be deployed on the same device
@@ -114,16 +113,9 @@ class Node {
     Topology* _topology {nullptr};
 
     Node* _root();
-    //Node* _parent() const;
     
-    void _device(int);
-    //void _height(int);
-    //void _parent(Node*);
     void _union(Node*);
     void _precede(Node*);
-
-    //int _height() const;
-    int _device() const;
 
     Host& _host_handle();
     Pull& _pull_handle();
@@ -268,89 +260,6 @@ inline bool Node::is_device() const {
   return (is_push() || is_pull() || is_kernel() || is_transfer());
 }
 
-/*// Function: _height
-inline int Node::_height() const {
-
-  struct visitor {
-    int operator () (const Host&   h) const { return -1; }
-    int operator () (const Push&   h) const { return -1; }
-    int operator () (const Pull&   h) const { return h.height; }
-    int operator () (const Kernel& h) const { return h.height; }
-  };
-
-  return nstd::visit(visitor{}, _handle);
-}
-
-// Function: _parent
-inline Node* Node::_parent() const {
-  
-  struct visitor {
-    Node* operator () (const Host&   h) const { return nullptr; }
-    Node* operator () (const Push&   h) const { return nullptr; }
-    Node* operator () (const Pull&   h) const { return h.parent; }
-    Node* operator () (const Kernel& h) const { return h.parent; }
-  };
-
-  return nstd::visit(visitor{}, _handle);
-}
-
-// Function: _height
-inline void Node::_height(int h) {
-  
-  struct visitor {
-    int v;
-    void operator () (Host&   h) { }
-    void operator () (Push&   h) { }
-    void operator () (Pull&   h) { h.height = v; }
-    void operator () (Kernel& h) { h.height = v; }
-  };
-
-  nstd::visit(visitor{h}, _handle);
-}
-
-// Function: _parent
-inline void Node::_parent(Node* ptr) {
-  
-  struct visitor {
-    Node* v;
-    void operator () (Host&   h) { }
-    void operator () (Push&   h) { }
-    void operator () (Pull&   h) { h.parent = v; }
-    void operator () (Kernel& h) { h.parent = v; }
-  };
-
-  nstd::visit(visitor{ptr}, _handle);
-} */
-
-// Function: _device
-inline void Node::_device(int d) {
-
-  struct visitor {
-    int v;
-    void operator () (Host&) { }
-    void operator () (Push&) { }
-    void operator () (Transfer&) { }
-    void operator () (Pull&   h) { h.device = v; }
-    void operator () (Kernel& h) { h.device = v; }
-  };
-
-  nstd::visit(visitor{d}, _handle);
-}
-
-// Function: _device
-inline int Node::_device() const {
-
-  struct visitor {
-    int operator () (const Host&) const { return -1; }
-    int operator () (const Push&) const { return -1; }
-    int operator () (const Pull&   h) const { return h.device; }
-    int operator () (const Kernel& h) const { return h.device; }
-    int operator () (const Transfer&) const { return -1; }
-  };
-
-  return nstd::visit(visitor{}, _handle);
-}
-
 // Function: _root
 inline Node* Node::_root() {
   auto ptr = this;
@@ -431,70 +340,6 @@ inline void Node::dump(std::ostream& os) const {
     os << 'p' << this << " -> " << 'p' << s << ";\n";
   }
 }
-
-
-//// Function: _root
-//inline Node* Node::_root() {
-//
-//  assert(is_kernel() || is_pull());
-//
-//  Node* parent {nullptr};
-//
-//  if(_parent == this) {
-//    return this;
-//  }
-//
-//  _parent = _parent->_root();
-//
-//  return _parent;
-//}
-//
-//// Procedure: _union
-//inline void Node::_union(Node* y) {
-//
-//  auto xroot = _root();
-//  auto yroot = y->_root();
-//
-//  if(xroot->_rank < yroot->_rank) {
-//    xroot->_parent = yroot;
-//  }
-//  else if(xroot->_rank > yroot->_rank) {
-//    yroot->_parent = xroot;
-//  }
-//  else {
-//    yroot->_parent = xroot;
-//    ++xroot->_rank;
-//  }
-//}
-
-/*// Function: root
-inline Node* Node::_root(Node* node) {
-  if(node->_parent != node) {
-    node->_parent = _root(node->_parent);
-  }
-  return node->_parent;
-}
-
-// Procedure: union_node
-inline void Node::_union_node(Node* x, Node* y) {
-
-  auto xroot = _root(x);
-  auto yroot = _root(y);
-
-  if(xroot->_rank < yroot->_rank) {
-    xroot->_parent = yroot;
-  }
-  else if(xroot->_rank > yroot->_rank) {
-    yroot->_parent = xroot;
-  }
-  else {
-    yroot->_parent = xroot;
-    ++xroot->_rank;
-  }
-}*/
-
-// ----------------------------------------------------------------------------
-
 
 }  // end of namespace hf -----------------------------------------------------
 

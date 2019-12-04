@@ -1,7 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 
 #include <doctest.h>
-
 #include <heteroflow/heteroflow.hpp>
 
 // ----------------------------------------------------------------------------
@@ -233,6 +232,30 @@ TEST_CASE("host-tasks" * doctest::timeout(300)) {
 TEST_CASE("gpu-memset" * doctest::timeout(300)) {
 
   const size_t num_tasks = 100;
+
+  SUBCASE("pull") {
+    for(size_t c=1; c<=C; ++c) {
+      for(size_t g=1; g<=G; ++g) {
+        hf::Executor executor(c, g);
+        hf::Heteroflow heteroflow;
+        for(size_t i=0; i<num_tasks; ++i) {
+          auto ndata= ::rand()%4096 + 1;
+          auto ptr  = new char[ndata];
+          auto pull = heteroflow.pull(nullptr, ndata, 'z');
+          auto push = heteroflow.push(ptr, pull, ndata);
+          auto host = heteroflow.host([=](){
+            for(auto j=0; j<ndata; j++) {
+              REQUIRE(ptr[j] == 'z');
+            }
+            delete [] ptr;
+          });
+          pull.precede(push);
+          push.precede(host);
+        }
+        executor.run(heteroflow).wait();
+      }
+    }
+  }
 
   SUBCASE("kernel") {
     for(size_t c=1; c<=C; ++c) {

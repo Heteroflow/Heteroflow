@@ -345,7 +345,7 @@ inline PullTask::PullTask(Node* node) :
 
 // Function: d_data
 inline void* PullTask::_d_data() {
-  return nonstd::get<node_handle_t>(_node->_handle).d_data;
+  return _node->_pull_handle().d_data;
 }
 
 // Function: pull
@@ -416,7 +416,7 @@ void PullTask::_invoke_pull(
     cudaMemcpyAsync(
       h.d_data, h_data, h_size, cudaMemcpyHostToDevice, s
     ),
-    "failed to pull memory in task ", name()
+    "failed to pull memory in task '", name(), '\''
   );
 }
 
@@ -472,7 +472,7 @@ void PullTask::_invoke_pull(
     cudaMemsetAsync(
       h.d_data, value, h_size, s
     ),
-    "failed to initialize memory in task ", name()
+    "failed to initialize memory in task '", name(), '\''
   );
 }
   
@@ -619,7 +619,7 @@ void PushTask::_invoke_push(
     cudaMemcpyAsync(
       h_data, ptr, h_size, cudaMemcpyDeviceToHost, stream
     ),
-    "failed to push memory in task ", name()
+    "failed to push memory in task '", name(), '\''
   );
 }
  
@@ -643,7 +643,7 @@ void PushTask::_invoke_push(
     cudaMemcpyAsync(
       h_data, s.d_data, h_size, cudaMemcpyDeviceToHost, stream
     ),
-    "failed to push memory in task ", name()
+    "failed to push memory in task '", name(), '\''
   );
 }
 
@@ -759,7 +759,7 @@ inline void TransferTask::_invoke_transfer(
     cudaMemcpyAsync(
       to_ptr, from_ptr, size, cudaMemcpyDeviceToDevice, stream
     ),
-    "failed to transfer memory in task ", name()
+    "failed to transfer memory in task '", name(), '\''
   );
 }
 
@@ -901,8 +901,17 @@ void KernelTask::_invoke_kernel(
   T t, 
   std::index_sequence<I ...>
 ) {
+
   auto& h = _node->_kernel_handle();
+
   f<<<g, b, s, stream>>>(_to_argument(std::get<I>(t))...);
+
+	HF_CHECK_CUDA(cudaPeekAtLastError(), 
+    "failed to launch kernel (grid=",
+    g.x, 'x', g.y, 'x', g.z, ", block=",
+    b.x, 'x', b.y, 'x', b.z, ", shm=",
+    s, ") in task '", name(), '\''
+  );
 }
 
 // Procedure: _invoke_kernel

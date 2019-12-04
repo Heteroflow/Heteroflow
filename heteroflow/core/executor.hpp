@@ -610,11 +610,9 @@ inline void Executor::_invoke_kernel(unsigned me, Node::Kernel& h, int d) {
     //  "failed to sync event ", me, " on device ", d
     //);
     HF_CHECK_CUDA(cudaStreamSynchronize(s),
-      "failed to sync stream ", me, " on device ", d
+      "worker ", me, " failed to sync stream on device ", d
     );
   }
-
-	//HF_CHECK_CUDA(cudaGetLastError(), " kernel execution error");
 }
 
 // Procedure: _invoke_transfer
@@ -1090,10 +1088,7 @@ inline void Executor::_run_prologue(Topology* tpg) {
 
   auto& graph = tpg->_heteroflow._graph;
 
-  // Put these in topology struct ?
-  std::vector<Node*> pull_nodes;
-  std::vector<Node*> kernel_nodes;
-  //std::vector<Node*> push_nodes;
+  std::vector<Node*> sources;
    
   // scan each node in the graph and build up the links
   for(auto& node : graph) {
@@ -1114,20 +1109,15 @@ inline void Executor::_run_prologue(Topology* tpg) {
       for(auto s : h.sources) {
         node->_union(s);
       }
-      kernel_nodes.push_back(node.get());
+      sources.push_back(node.get());
     }
-
-    if(node->is_pull()) {
-      pull_nodes.push_back(node.get());
+    else if(node->is_pull()) {
+      sources.push_back(node.get());
     }
-
-    //if(node->is_push()) {
-    //  push_nodes.push_back(node.get());
-    //}
   }
 
   // Constructr root device group and assign kernel node's device group
-  for(auto &n: kernel_nodes) {
+  for(auto &n: sources) {
     auto root = n->_root();
     if(root->_group == nullptr) {
       root->_group = new Node::DeviceGroup;
@@ -1139,64 +1129,7 @@ inline void Executor::_run_prologue(Topology* tpg) {
     }
   }
   
-  // TODO: do we need to assume each pull must stick
-  // with one kernel task?
-  for(auto &n: pull_nodes) {
-    auto root = n->_root();
-    assert(root->_group != nullptr);
-    if(n->_group == nullptr) {
-      n->_group = root->_group;
-    }
-  }
-
-  //// Set push node's device group
-  //for(auto &n: push_nodes) {
-  //  for(auto d: n->_dependents) {
-  //    if(d->is_kernel() || d->is_pull()) {
-  //      assert(d->_group != nullptr);
-  //      n->_parent = d->_parent;
-  //      n->_group = d->_group;
-  //      break;
-  //    }
-  //  }
-  //}
-
-  //for(auto& node : graph) {
-  //  if(node->is_push()) {
-  //    for(auto d: node->_dependents) {
-  //      if(d->is_kernel() || d->is_pull()) {
-  //         node->_parent = d->_parent;
-  //         break;
-  //      }
-  //    }
-  //  }
-  //}
-
   tpg->_cached_num_sinks = tpg->_num_sinks;
-
-  // gpu device assignment
-  //int cursor = 0;
-  //for(auto& node : graph) {
-  //  if(node->is_kernel() || node->is_pull()) {
-  //    assert(_gpu_devices.size() != 0);
-  //    auto r = node->_root();
-  //    auto d = r->_device();
-  //    
-  //    // need to assign a new gpu
-  //    if(d == -1) {
-  //      d = cursor++;
-  //      if(cursor == _gpu_devices.size()) {
-  //        cursor = 0;
-  //      }
-  //      r->_device(d);
-  //    }
-  //    node->_device(d);
-  //    
-  //    //std::cout << node->_name << " grouped to "
-  //    //          << node->_root()->_name << " with device "
-  //    //          << d << std::endl;
-  //  }
-  //}
 }
 
 // Procedure: _host_epilogue

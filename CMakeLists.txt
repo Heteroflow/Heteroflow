@@ -135,6 +135,10 @@ add_executable(saxpy ${HF_EXAMPLE_DIR}/saxpy.cu)
 #set_property(TARGET saxpy PROPERTY CUDA_STANDARD 14)
 target_link_libraries(saxpy ${CUDA_LIBRARIES} ${PROJECT_NAME})
 
+add_executable(matrix-multiplication ${HF_EXAMPLE_DIR}/matrix-multiplication.cu)
+#set_property(TARGET matrix-multiplication PROPERTY CUDA_STANDARD 14)
+target_link_libraries(matrix-multiplication ${CUDA_LIBRARIES} ${PROJECT_NAME})
+
 endif()
 
 # -----------------------------------------------------------------------------
@@ -147,7 +151,7 @@ enable_testing()
 message(STATUS "Building unit tests ...")
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${HF_UTEST_DIR})
 
-# unittest for heteroflow
+# unittest for basics
 add_executable(basics unittests/basics.cu)
 target_link_libraries(basics ${CUDA_LIBRARIES} ${PROJECT_NAME})
 target_include_directories(basics PRIVATE ${HF_THIRD_PARTY_DIR}/doctest)
@@ -156,6 +160,13 @@ add_test(gpu-memset ${HF_UTEST_DIR}/basics -tc=gpu-memset)
 add_test(gpu-transfer ${HF_UTEST_DIR}/basics -tc=gpu-transfer)
 add_test(statefulness ${HF_UTEST_DIR}/basics -tc=statefulness)
 add_test(run_n ${HF_UTEST_DIR}/basics -tc=run_n)
+
+# unittest for matrix-ops
+add_executable(matrix-ops unittests/matrix-ops.cu)
+target_link_libraries(matrix-ops ${CUDA_LIBRARIES} ${PROJECT_NAME})
+target_include_directories(matrix-ops PRIVATE ${HF_THIRD_PARTY_DIR}/doctest)
+add_test(matrix.multiplication ${HF_UTEST_DIR}/matrix-ops -tc=multiplication)
+add_test(matrix.transpose ${HF_UTEST_DIR}/matrix-ops -tc=transpose)
 
 endif()
 
