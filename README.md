@@ -73,6 +73,9 @@ Compile and run the code with the following commands:
 ~$ ./saxpy
 ```
 
+Heteroflow is header-only. Simply copy the entire folder 
+[heteroflow/](heteroflow/) to your project and add the include path accordingly.
+
 # Create a Heteroflow Application
 
 Heteroflow manages concurrent CPU-GPU programming 
