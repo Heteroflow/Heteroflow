@@ -1,6 +1,9 @@
 // matrix-multiplication.cu
 // 
-// Matrix multiplication program.
+// The program implements a matrix multiplication workload 
+// in two different task graphs:
+//  - CPU-only tasks (baseline)
+//  - CPU-GPU tasks
 //
 #include <heteroflow/heteroflow.hpp>
 
