@@ -74,11 +74,11 @@ struct function_traits<R(Args...)> {
 // ----------------------------------------------------------------------------
 
 // forward declaration
-class PushTask;
-class PullTask;
+class CopyTask;
+class SpanTask;
 class HostTask;
 class KernelTask;
-class TransferTask;
+class FillTask;
 
 //template <typename T>
 //struct stateful_decay {
@@ -87,7 +87,7 @@ class TransferTask;
 
 template <typename T>
 struct stateful_decay : std::conditional<
-  std::is_same<std::decay_t<T>, PullTask>::value, PullTask, T> {
+  std::is_same<std::decay_t<T>, SpanTask>::value, SpanTask, T> {
 };
 
 template <typename T>

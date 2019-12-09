@@ -64,65 +64,9 @@ inline ScopedDevice::ScopedDevice(int dev) {
 // Destructor
 inline ScopedDevice::~ScopedDevice() { 
   if(_p != -1) {
-    HF_CHECK_CUDA(cudaSetDevice(_p), "failed to scope back to device ", _p);
+    cudaSetDevice(_p);
+    //HF_CHECK_CUDA(cudaSetDevice(_p), "failed to scope back to device ", _p);
   }
-}
-
-// ----------------------------------------------------------------------------
-// Memory-related 
-// ----------------------------------------------------------------------------
-
-
-
-/**
-@brief asynchronously copies N bytes of data from a given source to the target
-
-@param T pointer to the target memory region, either in
-         host or any CUDA device's global memory
-@param S pointer to the source memory region, either in
-         host or any CUDA devices' global memory
-@param N number of bytes to transfer
-@param id CUDA stream id to enqueue this operation
-*/
-inline void memcpy(void* T, const void* S, size_t N, cudaStream_t id) {
-  HF_CHECK_CUDA(cudaMemcpyAsync(T, S, N, cudaMemcpyDefault, id), 
-    "failed to copy memory from ", S, " to ", T, " via stream ", id
-  );
-}
-
-/**
-@brief synchronously copies N bytes of data from a given source to the target
-
-@param T pointer to the target memory region, either in
-         host or any CUDA device's global memory
-@param S pointer to the source memory region, either in
-         host or any CUDA devices' global memory
-@param N number of bytes to transfer
-*/
-inline void memcpy(void* T, const void* S, size_t N) {
-  HF_CHECK_CUDA(cudaMemcpy(T, S, N, cudaMemcpyDefault), 
-    "failed to copy memory from ", S, " to ", T
-  );
-}
-
-// ----------------------------------------------------------------------------
-// Stream-related 
-// ----------------------------------------------------------------------------
-
-/**
-@brief creates a CUDA stream 
-*/
-inline cudaStream_t create_stream() {
-  cudaStream_t s;
-  HF_CHECK_CUDA(cudaStreamCreate(&s), "failed to create a stream");
-  return s;
-}
-
-/**
-@brief destroys a CUDA stream
-*/
-inline void destroy_stream(cudaStream_t s) {
-  HF_CHECK_CUDA(cudaStreamDestroy(s), "failed to destroy stream ", s);
 }
 
 // ----------------------------------------------------------------------------

@@ -7,6 +7,13 @@
 #include "macro.hpp"
 #include "utility.hpp"
 
+#define HF_THROW(...)                                 \
+std::ostringstream oss;                               \
+oss << "[" << __FILE__ << ":" << __LINE__ << "] ";    \
+hf::stringify(oss, __VA_ARGS__);                      \
+throw std::runtime_error(oss.str());                  \
+}                                                     
+
 #define HF_THROW_IF(...)                              \
 if(HF_GET_FIRST(__VA_ARGS__)) {                       \
   std::ostringstream oss;                             \
@@ -29,9 +36,7 @@ if(HF_GET_FIRST(__VA_ARGS__) != cudaSuccess) {        \
       << (error_name ? error_name : unknown_name)     \
       << ") - ";                                      \
   hf::stringify(oss, HF_REMOVE_FIRST(__VA_ARGS__));   \
-  oss << '\n';                                        \
-  std::cerr << oss.str();                             \
-  std::abort();                                       \
+  throw std::runtime_error(oss.str());                \
 }
 
 

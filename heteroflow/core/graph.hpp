@@ -15,9 +15,9 @@ class Node {
   friend class TaskBase;
 
   friend class HostTask;
-  friend class PullTask;
-  friend class PushTask;
-  friend class TransferTask;
+  friend class SpanTask;
+  friend class CopyTask;
+  friend class FillTask;
   friend class KernelTask;
   
   friend class FlowBuilder;
@@ -31,28 +31,28 @@ class Node {
     std::function<void()> work;
   };
 
-  // Pull data
-  struct Pull {
-    Pull() = default;
+  // Span data
+  struct Span {
+    Span() = default;
     std::function<void(cuda::Allocator&, cudaStream_t)> work;
     int device {-1};
     void* d_data {nullptr};
     size_t d_size {0};
   };  
   
-  // Push data
-  struct Push {
-    Push() = default;
+  // Copy data
+  struct Copy {
+    Copy() = default;
     std::function<void(cudaStream_t)> work;
-    Node* source {nullptr};
+    Node* span {nullptr};
+    cudaMemcpyKind direction {cudaMemcpyDefault};
   };
 
-  // Transfer data
-  struct Transfer {
-    Transfer() = default;
+  // Fill data
+  struct Fill {
+    Fill() = default;
     std::function<void(cudaStream_t)> work;
-    Node* source {nullptr};
-    Node* target {nullptr};
+    Node* span {nullptr};
   };
   
   // Kernel data
@@ -74,9 +74,9 @@ class Node {
     Node(ArgsT&&...);
     
     bool is_host() const;
-    bool is_push() const;
-    bool is_transfer() const;
-    bool is_pull() const;
+    bool is_copy() const;
+    bool is_fill() const;
+    bool is_span() const;
     bool is_kernel() const;
 		bool is_device() const;
 
@@ -90,14 +90,14 @@ class Node {
   private:
 
     static constexpr int HOST_IDX   = 0;
-    static constexpr int PULL_IDX   = 1;
-    static constexpr int PUSH_IDX   = 2;
+    static constexpr int SPAN_IDX   = 1;
+    static constexpr int COPY_IDX   = 2;
     static constexpr int KERNEL_IDX = 3;
-    static constexpr int TRANSFER_IDX  = 4;
+    static constexpr int FILL_IDX   = 4;
 
     std::string _name;
 
-    nstd::variant<Host, Pull, Push, Kernel, Transfer> _handle;
+    nstd::variant<Host, Span, Copy, Kernel, Fill> _handle;
 
     std::vector<Node*> _successors;
     std::vector<Node*> _dependents;
@@ -118,15 +118,15 @@ class Node {
     void _precede(Node*);
 
     Host& _host_handle();
-    Pull& _pull_handle();
-    Push& _push_handle();
-    Transfer& _transfer_handle();
+    Span& _span_handle();
+    Copy& _copy_handle();
+    Fill& _fill_handle();
     Kernel& _kernel_handle();
 
     const Host& _host_handle() const;
-    const Pull& _pull_handle() const;
-    const Push& _push_handle() const;
-    const Transfer& _transfer_handle() const;
+    const Span& _span_handle() const;
+    const Copy& _copy_handle() const;
+    const Fill& _fill_handle() const;
     const Kernel& _kernel_handle() const;
 };
 
@@ -135,11 +135,11 @@ class Node {
 // ----------------------------------------------------------------------------
 
 // ----------------------------------------------------------------------------
-// Pull field
+// Span field
 // ----------------------------------------------------------------------------
 
 // ----------------------------------------------------------------------------
-// Push field
+// Copy field
 // ----------------------------------------------------------------------------
 
 // ----------------------------------------------------------------------------
@@ -173,34 +173,34 @@ inline const Node::Host& Node::_host_handle() const {
   return nstd::get<Host>(_handle);
 }
 
-// Function: _push_handle    
-inline Node::Push& Node::_push_handle() {
-  return nstd::get<Push>(_handle);
+// Function: _copy_handle    
+inline Node::Copy& Node::_copy_handle() {
+  return nstd::get<Copy>(_handle);
 }
 
-// Function: _push_handle    
-inline const Node::Push& Node::_push_handle() const {
-  return nstd::get<Push>(_handle);
+// Function: _copy_handle    
+inline const Node::Copy& Node::_copy_handle() const {
+  return nstd::get<Copy>(_handle);
 }
 
-// Function: _transfer_handle    
-inline Node::Transfer& Node::_transfer_handle() {
-  return nstd::get<Transfer>(_handle);
+// Function: _fill_handle    
+inline Node::Fill& Node::_fill_handle() {
+  return nstd::get<Fill>(_handle);
 }
 
-// Function: _transfer_handle    
-inline const Node::Transfer& Node::_transfer_handle() const {
-  return nstd::get<Transfer>(_handle);
+// Function: _fill_handle    
+inline const Node::Fill& Node::_fill_handle() const {
+  return nstd::get<Fill>(_handle);
 }
 
-// Function: _pull_handle    
-inline Node::Pull& Node::_pull_handle() {
-  return nstd::get<Pull>(_handle);
+// Function: _span_handle    
+inline Node::Span& Node::_span_handle() {
+  return nstd::get<Span>(_handle);
 }
 
-// Function: _pull_handle    
-inline const Node::Pull& Node::_pull_handle() const {
-  return nstd::get<Pull>(_handle);
+// Function: _span_handle    
+inline const Node::Span& Node::_span_handle() const {
+  return nstd::get<Span>(_handle);
 }
 
 // Function: _kernel_handle    
@@ -235,19 +235,19 @@ inline bool Node::is_host() const {
   return _handle.index() == HOST_IDX;
 }
 
-// Function: is_pull
-inline bool Node::is_pull() const {
-  return _handle.index() == PULL_IDX;
+// Function: is_span
+inline bool Node::is_span() const {
+  return _handle.index() == SPAN_IDX;
 }
 
-// Function: is_push
-inline bool Node::is_push() const {
-  return _handle.index() == PUSH_IDX;
+// Function: is_copy
+inline bool Node::is_copy() const {
+  return _handle.index() == COPY_IDX;
 }
 
-// Function: is_transfer
-inline bool Node::is_transfer() const {
-  return _handle.index() == TRANSFER_IDX;
+// Function: is_fill
+inline bool Node::is_fill() const {
+  return _handle.index() == FILL_IDX;
 }
 
 // Function: is_kernel
@@ -257,7 +257,7 @@ inline bool Node::is_kernel() const {
 
 // Function: is_device
 inline bool Node::is_device() const {
-  return (is_push() || is_pull() || is_kernel() || is_transfer());
+  return (is_copy() || is_span() || is_kernel() || is_fill());
 }
 
 // Function: _root
@@ -309,26 +309,42 @@ inline void Node::dump(std::ostream& os) const {
 
   // color
   switch(_handle.index()) {
-    // pull
+    // span
     case 1:
       os << " style=filled fillcolor=\"cyan\"";
     break;
     
-    // push
-    case 2:
-      os << " style=filled fillcolor=\"springgreen\"";
+    // copy
+    case 2: {
+      auto& h = _copy_handle();
+      switch(h.direction) {
+        case cudaMemcpyHostToDevice:
+          os << " style=filled fillcolor=\"orange\"";
+        break;
+
+        case cudaMemcpyDeviceToHost:
+          os << " style=filled fillcolor=\"yellow\"";
+        break;
+
+        default:
+          os << " style=filled fillcolor=\"springgreen\"";
+        break;
+      }
+    }
     break;
     
     // kernel
     case 3:
-      os << " style=filled fillcolor=\"black\" fontcolor=\"white\"";
+      os << " style=\"filled\""
+         << " fillcolor=\"black\""
+         << " fontcolor=\"white\""
+         << " shape=\"box3d\"";
     break;
 
-    // transfer
+    // fill
     case 4:
       os << " style=filled fillcolor=\"coral\"";
     break;
-
 
     default:
     break;
@@ -348,3 +364,65 @@ inline void Node::dump(std::ostream& os) const {
 
 
 
+/*// Procedure: _d2h
+inline void CopyTask::_d2h(
+  void* tgt, SpanTask src, size_t offset, size_t bytes, cudaStream_t stream
+) {
+
+  auto& s = src._node->_span_handle();
+
+  auto ptr = static_cast<char*>(s.d_data) + offset;
+
+  HF_CHECK_CUDA(
+    cudaMemcpyAsync(
+      tgt, ptr, bytes, cudaMemcpyDeviceToHost, stream
+    ),
+    "copy (D2H) task '", name(), "' failed\n",
+    "target host/size: ", tgt, '/', bytes, '\n',
+    "source span/size/offset: ", s.d_data, '/', s.d_size, '/', offset
+  );
+}
+
+// Procedure: _h2d
+inline void CopyTask::_h2d(
+  SpanTask tgt, size_t offset, void* src, size_t bytes, cudaStream_t stream
+) {
+
+  auto& t = tgt._node->_span_handle();
+  
+  auto ptr = static_cast<char*>(t.d_data) + offset;
+
+  HF_CHECK_CUDA(
+    cudaMemcpyAsync(
+      ptr, src, bytes, cudaMemcpyHostToDevice, stream
+    ),
+    "copy (H2D) task '", name(), "' failed\n",
+    "target span/size/offset: ", t.d_data, '/', t.d_size, '/', offset, '\n',
+    "source host/size: ", src, '/', bytes
+  );
+}
+
+// Procedure: _d2d
+inline void CopyTask::_d2d(
+  SpanTask tgt, size_t t_offset, 
+  SpanTask src, size_t s_offset, 
+  size_t bytes,
+  cudaStream_t stream
+) {
+    
+  auto& t = tgt._node->_span_handle();
+  auto& s = src._node->_span_handle();
+    
+  auto tptr = static_cast<char*>(t.d_data) + t_offset;
+  auto sptr = static_cast<char*>(s.d_data) + s_offset;
+    
+  HF_CHECK_CUDA(
+    cudaMemcpyAsync(
+      tptr, sptr, bytes, cudaMemcpyDeviceToDevice, stream
+    ),
+    "copy (D2D) task '", name(), "' failed\n",
+    "target span/size/offset: ", t.d_data, '/', t.d_size, '/', t_offset, '\n',
+    "source span/size/offset: ", s.d_data, '/', s.d_size, '/', s_offset, '\n',
+    "bytes to copy: ", bytes
+  );
+}*/

@@ -22,7 +22,7 @@ class FlowBuilder {
     /**
     @brief creates a placeholder task
 
-    @tparam T task type (PullTask, PushTask, KernelTask, and HostTask)
+    @tparam T task type (SpanTask, CopyTask, KernelTask, and HostTask)
 
     @return task handle of type T
     */
@@ -42,26 +42,26 @@ class FlowBuilder {
     HostTask host(C&& callable); 
     
     /**
-    @brief creates a pull task that copies a given host memory block to gpu
+    @brief creates a span task that copies a given host memory block to gpu
 
     @tparam ArgsT argements types
-    @param args arguments to forward to construct a pull task
+    @param args arguments to forward to construct a span task
 
-    @return PullTask handle
+    @return SpanTask handle
     */
     template <typename... ArgsT>
-    PullTask pull(ArgsT&&... args);
+    SpanTask span(ArgsT&&... args);
     
     /**
-    @brief creates a push task that copies a given gpu memory block to the host
+    @brief creates a copy task that copies a given gpu memory block to the host
     
     @tparam ArgsT argements types
-    @param args arguments to forward to construct a push task
+    @param args arguments to forward to construct a copy task
 
-    @return PushTask handle
+    @return CopyTask handle
     */
     template <typename... ArgsT>
-    PushTask push(ArgsT&&... args);
+    CopyTask copy(ArgsT&&... args);
     
     /**
     @brief creates a kernel task that launches a given kernel 
@@ -75,15 +75,15 @@ class FlowBuilder {
     KernelTask kernel(ArgsT&&... args);
 
     /**
-    @brief creates a transfer task that send data between pull tasks
+    @brief creates a fill task that send data between span tasks
     
     @tparam ArgsT argements types
-    @param args arguments to forward to construct a transfer task
+    @param args arguments to forward to construct a fill task
     
-    @return TransferTask handle
+    @return FillTask handle
     */
     template <typename... ArgsT>
-    TransferTask transfer(ArgsT&&... args);
+    FillTask fill(ArgsT&&... args);
 
     /**
     @brief clears the graph
@@ -93,7 +93,7 @@ class FlowBuilder {
     /**
     @brief queries the number of nodes
     */
-    size_t num_nodes() const;
+    size_t size() const;
     
     /**
     @brief queries the number of nodes
@@ -165,41 +165,41 @@ HostTask FlowBuilder::host(C&& callable) {
         .work(std::forward<C>(callable));
 }
 
-// Function: pull
+// Function: span
 template <typename... C>
-PullTask FlowBuilder::pull(C&&... c) {
+SpanTask FlowBuilder::span(C&&... c) {
   
   _graph.emplace_back(std::make_unique<Node>(
-    nonstd::in_place_type_t<Node::Pull>{}
+    nonstd::in_place_type_t<Node::Span>{}
   ));
 
-  return PullTask(_graph.back().get())
-        .pull(std::forward<C>(c)...);
+  return SpanTask(_graph.back().get())
+        .span(std::forward<C>(c)...);
 }
 
-// Function: push
+// Function: copy
 template <typename... ArgsT>
-PushTask FlowBuilder::push(ArgsT&&... args) {
+CopyTask FlowBuilder::copy(ArgsT&&... args) {
 
   _graph.emplace_back(std::make_unique<Node>(
-    nonstd::in_place_type_t<Node::Push>{}
+    nonstd::in_place_type_t<Node::Copy>{}
   ));
 
-  return PushTask(_graph.back().get())
-        .push(std::forward<ArgsT>(args)...);
+  return CopyTask(_graph.back().get())
+        .copy(std::forward<ArgsT>(args)...);
 }
 
 
-// Function: transfer 
+// Function: fill 
 template <typename... ArgsT>
-TransferTask FlowBuilder::transfer(ArgsT&&... args) {
+FillTask FlowBuilder::fill(ArgsT&&... args) {
 
   _graph.emplace_back(std::make_unique<Node>(
-    nonstd::in_place_type_t<Node::Transfer>{}
+    nonstd::in_place_type_t<Node::Fill>{}
   ));
 
-  return TransferTask(_graph.back().get())
-        .transfer(std::forward<ArgsT>(args)...);
+  return FillTask(_graph.back().get())
+        .fill(std::forward<ArgsT>(args)...);
 }
 
 
@@ -220,8 +220,8 @@ inline void FlowBuilder::clear() {
   _graph.clear();
 }
 
-// Function: num_nodes
-inline size_t FlowBuilder::num_nodes() const {
+// Function: size
+inline size_t FlowBuilder::size() const {
   return _graph.size();
 }
 

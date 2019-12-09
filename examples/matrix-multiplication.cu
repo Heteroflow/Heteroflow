@@ -29,7 +29,7 @@ auto gpu(int M, int N, int K) {
   std::vector<int> a, b, c;
 
   hf::Executor executor(4, 1);  // 4 cpus 1 gpu
-  hf::Heteroflow heteroflow;
+  hf::Heteroflow hf;
 
   int* ptr_a {nullptr};
   int* ptr_b {nullptr};
@@ -38,39 +38,35 @@ auto gpu(int M, int N, int K) {
   dim3 grid  ((K+16-1)/16, (M+16-1)/16);
   dim3 block (16, 16);
 
-  auto ha = heteroflow.host([&](){ 
+  auto ha = hf.host([&](){ 
     a.resize(M*N, M+N);
     ptr_a = a.data();
   }).name("allocate_a");
 
-  auto hb = heteroflow.host([&](){ 
+  auto hb = hf.host([&](){ 
     b.resize(N*K, N+K);
     ptr_b = b.data();
   }).name("allocate_b");
 
-  auto hc = heteroflow.host([&](){
+  auto hc = hf.host([&](){
     c.resize(M*K, 0);
     ptr_c = c.data();
   }).name("allocate_c");
 
-  auto pa = heteroflow.pull(std::ref(ptr_a), M*N*sizeof(int))
-                      .name("pull_a");
-  auto pb = heteroflow.pull(std::ref(ptr_b), N*K*sizeof(int))
-                      .name("pull_b");
-  auto pc = heteroflow.pull(nullptr, M*K*sizeof(int))
-                      .name("init_c");
-  auto op = heteroflow.kernel(
-    grid, block, 0, k_multiplication, pa, pb, pc, M, N, K
+  auto sa = hf.span(std::ref(ptr_a), M*N*sizeof(int)).name("span_a");
+  auto sb = hf.span(std::ref(ptr_b), N*K*sizeof(int)).name("span_b");
+  auto sc = hf.span(M*K*sizeof(int)).name("span_c");
+  auto op = hf.kernel(
+    grid, block, 0, k_multiplication, sa, sb, sc, M, N, K
   ).name("kernel");
-  auto cc = heteroflow.push(std::ref(ptr_c), pc, M*K*sizeof(int))
-                      .name("push_c");
+  auto cc = hf.copy(std::ref(ptr_c), sc, M*K*sizeof(int)).name("push_c");
   
-  ha.precede(pa);
-  hb.precede(pb);
-  op.succeed(pa, pb, pc).precede(cc);
+  ha.precede(sa);
+  hb.precede(sb);
+  op.succeed(sa, sb, sc).precede(cc);
   cc.succeed(hc);
 
-  executor.run(heteroflow).wait();
+  executor.run(hf).wait();
   
   return c;  
 }
@@ -81,21 +77,21 @@ auto cpu(int M, int N, int K) {
   std::vector<int> a, b, c;
 
   hf::Executor executor(4, 1);  // 4 cpus 1 gpu
-  hf::Heteroflow heteroflow;
+  hf::Heteroflow hf;
 
-  auto ha = heteroflow.host([&](){ 
+  auto ha = hf.host([&](){ 
     a.resize(M*N, M+N);
   }).name("allocate_a");
 
-  auto hb = heteroflow.host([&](){ 
+  auto hb = hf.host([&](){ 
     b.resize(N*K, N+K);
   }).name("allocate_b");
 
-  auto hc = heteroflow.host([&](){
+  auto hc = hf.host([&](){
     c.resize(M*K, 0);
   }).name("allocate_c");
 
-  auto op = heteroflow.host([&](){
+  auto op = hf.host([&](){
     for(int m=0; m<M; m++) {
       for(int k=0; k<K; k++) {
         for(int n=0; n<N; n++) {
@@ -107,7 +103,7 @@ auto cpu(int M, int N, int K) {
   
   op.succeed(ha, hb, hc);
 
-  executor.run(heteroflow).wait();
+  executor.run(hf).wait();
   
   return c;
 }
@@ -145,12 +141,24 @@ int main(int argc, char* argv[]) {
   
   int64_t error = 0;
   std::cout << "verifying results ... ";
-  for(int i=0; i<M*N; ++i) {
+  for(int i=0; i<M*K; ++i) {
     error += abs(gres[i] - cres[i]);
   }
   std::cout << "abs-error=" << error << '\n';
 
   return 0;
 }
+
+
+
+
+
+
+
+
+
+
+
+
 
 

@@ -48,22 +48,22 @@ int main(void) {
 
   auto host_x = hf.host([&]{ x = create_vector(N, 1.0f); }).name("create_x");
   auto host_y = hf.host([&]{ y = create_vector(N, 2.0f); }).name("create_y"); 
-  auto pull_x = hf.pull(std::ref(x), B).name("pull_x");
-  auto pull_y = hf.pull(std::ref(y), B).name("pull_y");
-  auto kernel = hf.kernel((N+255)/256, 256, 0, saxpy, N, 2.0f, pull_x, pull_y)
+  auto span_x = hf.span(std::ref(x), B).name("span_x");
+  auto span_y = hf.span(std::ref(y), B).name("span_y");
+  auto kernel = hf.kernel((N+255)/256, 256, 0, saxpy, N, 2.0f, span_x, span_y)
                   .name("saxpy");
-  auto push_x = hf.push(std::ref(x), pull_x, B).name("push_x");
-  auto push_y = hf.push(std::ref(y), pull_y, B).name("push_y");
+  auto copy_x = hf.copy(std::ref(x), span_x, B).name("copy_x");
+  auto copy_y = hf.copy(std::ref(y), span_y, B).name("copy_y");
   auto verify = hf.host([&]{ verify_result(x, y, N); }).name("verify");
   auto kill_x = hf.host([&]{ delete_vector(x); }).name("delete_x");
   auto kill_y = hf.host([&]{ delete_vector(y); }).name("delete_y");
 
-  host_x.precede(pull_x);
-  host_y.precede(pull_y);
-  kernel.precede(push_x, push_y)
-        .succeed(pull_x, pull_y);
+  host_x.precede(span_x);
+  host_y.precede(span_y);
+  kernel.precede(copy_x, copy_y)
+        .succeed(span_x, span_y);
   verify.precede(kill_x, kill_y)
-        .succeed(push_x, push_y);
+        .succeed(copy_x, copy_y);
   
   // dump the graph
   hf.dump(std::cout);

@@ -19,16 +19,6 @@ template <typename Derived>
 class TaskBase {
 
   public:
-    
-    /**
-    @brief copy constructor
-    */
-    TaskBase(const TaskBase&) = default;
-
-    /**
-    @brief copy assignment
-    */
-    TaskBase& operator = (const TaskBase&) = default;
 
     /**
     @brief queries the name of the task
@@ -93,7 +83,11 @@ class TaskBase {
 
   protected:
     
+    TaskBase() = default;
     TaskBase(Node*);
+    TaskBase(const TaskBase&) = default;
+
+    TaskBase& operator = (const TaskBase&) = default;
 
     Node* _node {nullptr};
    
@@ -214,10 +208,10 @@ Derived TaskBase<Derived>::precede(Ts&&... tasks) {
 class HostTask : public TaskBase<HostTask> {
 
   friend class TaskBase<HostTask>;
-  friend class TaskBase<PullTask>;
-  friend class TaskBase<PushTask>;
+  friend class TaskBase<SpanTask>;
+  friend class TaskBase<CopyTask>;
   friend class TaskBase<KernelTask>;
-  friend class TaskBase<TransferTask>;
+  friend class TaskBase<FillTask>;
 
   friend class FlowBuilder;
 
@@ -269,500 +263,611 @@ HostTask HostTask::work(C&& callable) {
 // ----------------------------------------------------------------------------
 
 /**
-@class PullTask
+@class SpanTask
 
-@brief the handle to a pull task
+@brief the handle to a span task
 */
-class PullTask : public TaskBase<PullTask> {
+class SpanTask : public TaskBase<SpanTask> {
   
   friend class TaskBase<HostTask>;
-  friend class TaskBase<PullTask>;
-  friend class TaskBase<PushTask>;
+  friend class TaskBase<SpanTask>;
+  friend class TaskBase<CopyTask>;
   friend class TaskBase<KernelTask>;
-  friend class TaskBase<TransferTask>;
+  friend class TaskBase<FillTask>;
   
   friend class KernelTask;
-  friend class PushTask;
-  friend class TransferTask;
+  friend class CopyTask;
+  friend class FillTask;
 
   friend class FlowBuilder;
   
-  friend PointerCaster to_kernel_argument(PullTask);
+  friend PointerCaster to_kernel_argument(SpanTask);
   
-  using node_handle_t = Node::Pull;
+  using node_handle_t = Node::Span;
 
   public:
 
     /**
-    @brief constructs an empty pull task handle
+    @brief constructs an empty span task handle
     */
-    PullTask() = default;
+    SpanTask() = default;
     
     /**
     @brief copy constructor
     */
-    PullTask(const PullTask&) = default;
+    SpanTask(const SpanTask&) = default;
 
     /**
     @brief copy assignment
     */
-    PullTask& operator = (const PullTask&) = default;
-
+    SpanTask& operator = (const SpanTask&) = default;
+    
     /**
-    @brief alters the host memory block to copy to GPU
-
-    @tparam ArgsT argements types
-    @param args arguments to forward to construct a span object
+    @brief creates a memory span on GPU
     */
-    template<typename P, typename N>
-    PullTask pull(P&& pointer, N&& bytes);
-
-    template<typename N>
-    PullTask pull(std::nullptr_t, N&& bytes);
-    
-    template<typename N, typename V>
-    PullTask pull(std::nullptr_t, N&& bytes, V&& value);
-   
-  private:
-    
-    PullTask(Node*);
-    
-    void* _d_data();
-    
-    template <typename P>
-    void _invoke_pull(P&&, size_t, cuda::Allocator&, cudaStream_t);
-
-    void _invoke_pull(std::nullptr_t, size_t, cuda::Allocator&, cudaStream_t);
-
-    template <typename V>
-    void _invoke_pull(std::nullptr_t, size_t, V&&, cuda::Allocator&, cudaStream_t);
-};
-
-// Constructor
-inline PullTask::PullTask(Node* node) : 
-  TaskBase::TaskBase {node} {
-}
-
-// Function: d_data
-inline void* PullTask::_d_data() {
-  return _node->_pull_handle().d_data;
-}
-
-// Function: pull
-template<typename P, typename N>
-PullTask PullTask::pull(P&& ptr, N&& size) {
-   
-  _node->_pull_handle().work = [
-    p=*this, ptr=std::forward<P>(ptr), size=std::forward<N>(size)
-  ] (cuda::Allocator& a, cudaStream_t s) mutable {
-    p._invoke_pull(ptr, size, a, s);
-  };
-
-  return *this;
-}
-
-// Function: pull
-template<typename N>
-PullTask PullTask::pull(std::nullptr_t, N&& size) {
-   
-  _node->_pull_handle().work = [
-    p=*this, size=std::forward<N>(size)
-  ] (cuda::Allocator& a, cudaStream_t s) mutable {
-    p._invoke_pull(nullptr, size, a, s);
-  };
-
-  return *this;
-}
-
-// Function: pull
-template<typename N, typename V>
-PullTask PullTask::pull(std::nullptr_t, N&& size, V&& value) {
-   
-  _node->_pull_handle().work = [
-    p=*this, size=std::forward<N>(size), value=std::forward<V>(value)
-  ] (cuda::Allocator& a, cudaStream_t s) mutable {
-    p._invoke_pull(nullptr, size, value, a, s);
-  };
-
-  return *this;
-}
-
-// Function: _invoke_pull
-template <typename P>
-void PullTask::_invoke_pull(
-  P&& h_data, size_t h_size, cuda::Allocator& a, cudaStream_t s
-) {
-      
-  // pull handle
-  auto& h = _node->_pull_handle();
-
-  // allocate the global memory
-  if(h.d_data == nullptr) {
-    assert(h.d_size == 0);
-    h.d_size = h_size;
-    h.d_data = a.allocate(h.d_size);
-  }
-  // Check size first (graph is resuable)
-  // reallocate the global memory
-  else if(h.d_size < h_size) {
-    assert(h.d_data != nullptr);
-    h.d_size = h_size;
-    a.deallocate(h.d_data);
-    h.d_data = a.allocate(h.d_size);
-  }
-
-  // transfer the memory
-  HF_CHECK_CUDA(
-    cudaMemcpyAsync(
-      h.d_data, h_data, h_size, cudaMemcpyHostToDevice, s
-    ),
-    "failed to pull memory in task '", name(), '\''
-  );
-}
-
-
-// Function: _invoke_pull
-inline void PullTask::_invoke_pull(
-  std::nullptr_t, size_t h_size, cuda::Allocator& a, cudaStream_t
-) {
-  // pull handle
-  auto& h = _node->_pull_handle();
-
-  // allocate the global memory
-  if(h.d_data == nullptr) {
-    assert(h.d_size == 0);
-    h.d_size = h_size;
-    h.d_data = a.allocate(h.d_size);
-  }
-  // Check size first (graph is resuable)
-  // reallocate the global memory
-  else if(h.d_size < h_size) {
-    assert(h.d_data != nullptr);
-    h.d_size = h_size;
-    a.deallocate(h.d_data);
-    h.d_data = a.allocate(h.d_size);
-  }
-}
-
-// Function: _invoke_pull
-template <typename V>
-void PullTask::_invoke_pull(
-  std::nullptr_t, size_t h_size, V&& value, cuda::Allocator& a, cudaStream_t s
-) {
-  // pull handle
-  auto& h = _node->_pull_handle();
-
-  // allocate the global memory
-  if(h.d_data == nullptr) {
-    assert(h.d_size == 0);
-    h.d_size = h_size;
-    h.d_data = a.allocate(h.d_size);
-  }
-  // Check size first (graph is resuable)
-  // reallocate the global memory
-  else if(h.d_size < h_size) {
-    assert(h.d_data != nullptr);
-    h.d_size = h_size;
-    a.deallocate(h.d_data);
-    h.d_data = a.allocate(h.d_size);
-  }
-
-  // Initialize the memory
-  HF_CHECK_CUDA(
-    cudaMemsetAsync(
-      h.d_data, value, h_size, s
-    ),
-    "failed to initialize memory in task '", name(), '\''
-  );
-}
-  
-// ----------------------------------------------------------------------------
-
-/**
-@class PushTask
-
-@brief the handle to a push task
-*/
-class PushTask : public TaskBase<PushTask> {
-  
-  friend class TaskBase<HostTask>;
-  friend class TaskBase<PullTask>;
-  friend class TaskBase<PushTask>;
-  friend class TaskBase<KernelTask>;
-  friend class TaskBase<TransferTask>;
-
-  friend class FlowBuilder;
-  
-  using node_handle_t = Node::Push;
-
-  public:
+    template <typename N>
+    SpanTask span(N&& bytes);
 
     /**
-    @brief constructs an empty push task handle
-    */
-    PushTask() = default;
-    
-    /**
-    @brief copy constructor
-    */
-    PushTask(const PushTask&) = default;
-
-    /**
-    @brief copy assignment
-    */
-    PushTask& operator = (const PushTask&) = default;
-    
-    /**
-    @brief copies GPU data from a source pull task to host
-    
-    @tparam P pointer type
-    @tparam N size type
-    @param ptr pointer to the host memory block
-    @param src source pull task from which data is copied
-    @param bytes number of bytes to copy
+    @brief creates a memory span on GPU and copies data from a host memory
     */
     template <typename P, typename N>
-    PushTask push(P&& ptr, PullTask src, N&& bytes);
-   
-    /**
-    @brief copies GPU data from a source pull task to host
-    
-    @tparam P pointer type
-    @tparam O offset type
-    @tparam N size type
-    @param ptr pointer to the host memory block
-    @param src source pull task from which data is copied
-    @param offset offset in bytes to the beginning point of the memory address
-    @param bytes number of bytes to copy
-    */
-    template <typename P, typename O, typename N>
-    PushTask push(P&& ptr, PullTask src, O&& offset, N&& bytes);
+    SpanTask span(P&& ptr, N&& bytes);
 
   private:
-
-    PushTask(Node* node);
     
-    template <typename P>
-    void _invoke_push(P&&, size_t, size_t, cudaStream_t);
+    SpanTask(Node*);
+    
+    void* _d_data();
 
-    template <typename P>
-    void _invoke_push(P&&, size_t, cudaStream_t);
-
+    void _allocate(cuda::Allocator&, size_t);
 };
 
-inline PushTask::PushTask(Node* node) : 
+// Constructor
+inline SpanTask::SpanTask(Node* node) : 
   TaskBase::TaskBase {node} {
 }
 
-// Function: push
+// Function: _d_data
+inline void* SpanTask::_d_data() {
+  return _node->_span_handle().d_data;
+}
+
+// Procedure: _allocate
+inline void SpanTask::_allocate(cuda::Allocator& a, size_t N) {
+  auto& h = _node->_span_handle();
+  if(h.d_size < N) {
+    h.d_size = N;
+    a.deallocate(h.d_data);
+    h.d_data = a.allocate(h.d_size);
+  }
+}
+   
+// Function: span
+template<typename N>
+SpanTask SpanTask::span(N&& bytes) {
+   
+  _node->_span_handle().work = [
+    p=*this, bytes=std::forward<N>(bytes)
+  ] (cuda::Allocator& a, cudaStream_t) mutable {
+    p._allocate(a, bytes);
+  };
+
+  return *this;
+}
+
+// Function: span
+template<typename P, typename N>
+SpanTask SpanTask::span(P&& data, N&& bytes) {
+   
+  _node->_span_handle().work = [
+    task=*this, data=std::forward<P>(data), bytes=std::forward<N>(bytes)
+  ] (cuda::Allocator& a, cudaStream_t stream) mutable {
+
+    task._allocate(a, bytes);
+    
+    auto& s = task._node->_span_handle();
+
+    HF_CHECK_CUDA(
+      cudaMemcpyAsync(
+        s.d_data, data, bytes, cudaMemcpyHostToDevice, stream
+      ),
+      "span task '", task.name(), "' failed on H2D transfers\n",
+      "source span/size: ", s.d_data, '/', s.d_size, '\n',
+      "target host/size: ", data, '/', bytes
+    );
+  };
+
+  return *this;
+}
+
+// ----------------------------------------------------------------------------
+
+/**
+@class CopyTask
+
+@brief the handle to a copy task
+*/
+class CopyTask : public TaskBase<CopyTask> {
+  
+  friend class TaskBase<HostTask>;
+  friend class TaskBase<SpanTask>;
+  friend class TaskBase<CopyTask>;
+  friend class TaskBase<KernelTask>;
+  friend class TaskBase<FillTask>;
+
+  friend class FlowBuilder;
+  
+  using node_handle_t = Node::Copy;
+
+  public:
+
+    /**
+    @brief constructs an empty copy task handle
+    */
+    CopyTask() = default;
+    
+    /**
+    @brief copy constructor
+    */
+    CopyTask(const CopyTask&) = default;
+
+    /**
+    @brief copy assignment
+    */
+    CopyTask& operator = (const CopyTask&) = default;
+    
+    /**
+    @brief performs device-to-host data transfers
+    */
+    template <typename P, typename N>
+    CopyTask copy(P&& t, SpanTask s, N&& bytes);
+   
+    /**
+    @brief performs device-to-host data transfers
+    */
+    template <typename P, typename O, typename N>
+    CopyTask copy(P&& t, SpanTask s, O&& offset, N&& bytes);
+
+    /**
+    @brief performs host-to-device data transfers
+    */
+    template <typename P, typename N>
+    CopyTask copy(SpanTask t, P&& ptr, N&& bytes);
+    
+    /**
+    @brief performs host-to-device data transfers
+    */
+    template <typename O, typename P, typename N>
+    CopyTask copy(SpanTask t, O&& offset, P&& ptr, N&& bytes);
+
+    /**
+    @brief performs device-to-device data transfers
+    */
+    template <typename N>
+    CopyTask copy(SpanTask t, SpanTask s, N&& bytes);
+    
+    /**
+    @brief performs device-to-device data transfers
+    */
+    template <typename OS, typename N>
+    CopyTask copy(SpanTask t, SpanTask s, OS&& s_offset, N&& bytes);
+    
+    /**
+    @brief performs device-to-device data transfers
+    */
+    template <typename OT, typename N>
+    CopyTask copy(SpanTask t, OT&& t_offset, SpanTask s, N&& bytes);
+
+    /**
+    @brief performs device-to-device data transfers
+    */
+    template <typename OT, typename OS, typename N>
+    CopyTask copy(SpanTask t, OT&& t_offset, SpanTask s, OS&& s_offset, N&& bytes);
+
+  private:
+
+    CopyTask(Node* node);
+
+    void _h2d(SpanTask, size_t, void*, size_t, cudaStream_t);
+    void _d2h(void*, SpanTask, size_t, size_t, cudaStream_t);
+    void _d2d(SpanTask, size_t, SpanTask, size_t, size_t, cudaStream_t stream);
+};
+
+inline CopyTask::CopyTask(Node* node) : 
+  TaskBase::TaskBase {node} {
+}
+
+// Function: copy (D2H)
 template <typename P, typename N>
-PushTask PushTask::push(P&& p, PullTask source, N&& n) {
-  HF_THROW_IF(!_node,  "push task can't be empty");
-  HF_THROW_IF(!source, "pull task can't be empty");
+CopyTask CopyTask::copy(P&& tgt, SpanTask src, N&& n) {
 
-  auto& h = _node->_push_handle();
+  HF_THROW_IF(!_node,  "copy task can't be empty");
+  HF_THROW_IF(!src, "source span task can't be empty");
 
-  h.source = source._node;
+  auto& h = _node->_copy_handle();
+
+  h.span = src._node;
+  h.direction = cudaMemcpyDeviceToHost;
 
   h.work = [
-    task = *this, 
-    ptr  = std::forward<P>(p), 
-    size = std::forward<N>(n)
+    task  = *this, 
+    tgt   = std::forward<P>(tgt), 
+    src   = src,
+    bytes = std::forward<N>(n)
   ] (cudaStream_t stream) mutable {
-    task._invoke_push(ptr, size, stream);
+    task._d2h(tgt, src, 0, bytes, stream);
   };
 
   return *this;
 }
 
-// Function: push
+// Function: copy (D2H)
 template <typename P, typename O, typename N>
-PushTask PushTask::push(P&& p, PullTask source, O&& o, N&& n) {
+CopyTask CopyTask::copy(P&& tgt, SpanTask src, O&& o, N&& n) {
 
-  HF_THROW_IF(!_node,  "push task can't be empty");
-  HF_THROW_IF(!source, "pull task can't be empty");
+  HF_THROW_IF(!_node, "copy task can't be empty");
+  HF_THROW_IF(!src, "source span task can't be empty");
+  
+  auto& h = _node->_copy_handle();
 
-  auto& h = _node->_push_handle();
-
-  h.source = source._node;
-
+  h.span = src._node;
+  h.direction = cudaMemcpyDeviceToHost;
+  
   h.work = [
-    t = *this, 
-    p = std::forward<P>(p), 
-    o = std::forward<O>(o),
-    n = std::forward<N>(n) 
+    task   = *this, 
+    tgt    = std::forward<P>(tgt), 
+    src    = src,
+    offset = std::forward<O>(o),
+    bytes  = std::forward<N>(n)
   ] (cudaStream_t stream) mutable {
-    t._invoke_push(p, o, n, stream);
+    task._d2h(tgt, src, offset, bytes, stream);
   };
 
   return *this;
 }
 
-// Procedure: _invoke_push
-template <typename P>
-void PushTask::_invoke_push(
-  P &&h_data, size_t offset, size_t h_size, cudaStream_t stream
+// Function: copy (H2D)
+template <typename P, typename N>
+CopyTask CopyTask::copy(SpanTask tgt, P&& src, N&& bytes) {
+
+  HF_THROW_IF(!_node, "copy task can't be empty");
+  HF_THROW_IF(!tgt, "target span task can't be empty");
+  
+  auto& h = _node->_copy_handle();
+
+  h.span = tgt._node;
+  h.direction = cudaMemcpyHostToDevice;
+
+  h.work = [
+    task  = *this, 
+    tgt   = tgt, 
+    src   = std::forward<P>(src),
+    bytes = std::forward<N>(bytes)
+  ] (cudaStream_t stream) mutable {
+    task._h2d(tgt, 0, src, bytes, stream);
+  };
+
+  return *this;
+}
+
+// Function: copy (H2D)
+template <typename O, typename P, typename N>
+CopyTask CopyTask::copy(SpanTask tgt, O&& offset, P&& src, N&& bytes) {
+
+  HF_THROW_IF(!_node, "copy task can't be empty");
+  HF_THROW_IF(!tgt, "target span task can't be empty");
+  
+  auto& h = _node->_copy_handle();
+
+  h.span = tgt._node;
+  h.direction = cudaMemcpyHostToDevice;
+
+  h.work = [
+    task   = *this, 
+    tgt    = tgt, 
+    offset = std::forward<O>(offset),
+    src    = std::forward<P>(src),
+    bytes  = std::forward<N>(bytes)
+  ] (cudaStream_t stream) mutable {
+    task._h2d(tgt, offset, src, bytes, stream);
+  };
+
+  return *this;
+}
+
+// Function: copy (D2D)
+template <typename N>
+CopyTask CopyTask::copy(SpanTask tgt, SpanTask src, N&& bytes) {
+
+  HF_THROW_IF(!_node, "copy task can't be empty");
+  HF_THROW_IF(!tgt, "target span task can't be empty");
+  HF_THROW_IF(!src, "source span task can't be empty");
+  
+  auto& h = _node->_copy_handle();
+
+  h.span = src._node;
+  h.direction = cudaMemcpyDeviceToDevice;
+
+  h.work = [
+    task  = *this, 
+    tgt   = tgt, 
+    src   = src,
+    bytes = std::forward<N>(bytes)
+  ] (cudaStream_t stream) mutable {
+    task._d2d(tgt, 0, src, 0, bytes, stream);
+  };
+
+  return *this;
+}
+
+// Function: copy (D2D)
+template <typename OS, typename N>
+CopyTask CopyTask::copy(SpanTask t, SpanTask s, OS&& s_offset, N&& bytes) {
+  
+  HF_THROW_IF(!_node, "copy task can't be empty");
+  HF_THROW_IF(!t, "target span task can't be empty");
+  HF_THROW_IF(!s, "source span task can't be empty");
+  
+  auto& h = _node->_copy_handle();
+
+  h.span = s._node;
+  h.direction = cudaMemcpyDeviceToDevice;
+
+  h.work = [
+    task     = *this, 
+    tgt      = t, 
+    src      = s,
+    s_offset = std::forward<OS>(s_offset),
+    bytes    = std::forward<N>(bytes)
+  ] (cudaStream_t stream) mutable {
+    task._d2d(tgt, 0, src, s_offset, bytes, stream);
+  };
+
+  return *this;
+}
+
+// Function: copy (D2D)
+template <typename OT, typename N>
+CopyTask CopyTask::copy(
+  SpanTask tgt, OT&& tgt_offset, SpanTask src, N&& bytes
 ) {
-  // get the handle and device memory
-  auto& h = _node->_push_handle();
-  auto& s = h.source->_pull_handle();
 
-  // std::cout << "push " << h_data << ' ' << h_size << std::endl;
+  HF_THROW_IF(!_node, "copy task can't be empty");
+  HF_THROW_IF(!tgt, "target span task can't be empty");
+  HF_THROW_IF(!src, "source span task can't be empty");
+  
+  auto& h = _node->_copy_handle();
 
-  HF_THROW_IF(s.d_data == nullptr || s.d_size < h_size,
-    "invalid memory push from ", h.source->_name, " to ", name()
-  ); 
+  h.span = src._node;
+  h.direction = cudaMemcpyDeviceToDevice;
 
-  auto ptr = static_cast<unsigned char*>(s.d_data) + offset;
+  h.work = [
+    task     = *this, 
+    tgt      = tgt, 
+    t_offset = std::forward<OT>(tgt_offset),
+    src      = src,
+    bytes    = std::forward<N>(bytes)
+  ] (cudaStream_t stream) mutable {
+    task._d2d(tgt, t_offset, src, 0, bytes, stream);
+  };
+
+  return *this;
+}
+
+// Function: copy (D2D)
+template <typename OT, typename OS, typename N>
+CopyTask CopyTask::copy(
+  SpanTask tgt, OT&& tgt_offset, SpanTask src, OS&& src_offset, N&& bytes
+) {
+
+  HF_THROW_IF(!_node, "copy task can't be empty");
+  HF_THROW_IF(!tgt, "target span task can't be empty");
+  HF_THROW_IF(!src, "source span task can't be empty");
+  
+  auto& h = _node->_copy_handle();
+
+  h.span = src._node;
+  h.direction = cudaMemcpyDeviceToDevice;
+
+  h.work = [
+    task     = *this, 
+    tgt      = tgt, 
+    t_offset = std::forward<OT>(tgt_offset),
+    src      = src,
+    s_offset = std::forward<OS>(src_offset),
+    bytes    = std::forward<N>(bytes)
+  ] (cudaStream_t stream) mutable {
+    task._d2d(tgt, t_offset, src, s_offset, bytes, stream);
+  };
+
+  return *this;
+}
+
+// Procedure: _h2d
+inline void CopyTask::_h2d(
+  SpanTask tgt, size_t offset, void* src, size_t bytes, cudaStream_t stream
+) {
+
+  auto& t = tgt._node->_span_handle();
+  
+  auto ptr = static_cast<char*>(t.d_data) + offset;
 
   HF_CHECK_CUDA(
     cudaMemcpyAsync(
-      h_data, ptr, h_size, cudaMemcpyDeviceToHost, stream
+      ptr, src, bytes, cudaMemcpyHostToDevice, stream
     ),
-    "failed to push memory in task '", name(), '\''
+    "copy (H2D) task '", name(), "' failed\n",
+    "target span/size/offset: ", t.d_data, '/', t.d_size, '/', offset, '\n',
+    "source host/size: ", src, '/', bytes
   );
 }
- 
 
-// Procedure: _invoke_push
-template <typename P>
-void PushTask::_invoke_push(
-  P &&h_data, size_t h_size, cudaStream_t stream
+// Procedure: _d2h
+inline void CopyTask::_d2h(
+  void* tgt, SpanTask src, size_t offset, size_t bytes, cudaStream_t stream
 ) {
-  // get the handle and device memory
-  auto& h = _node->_push_handle();
-  auto& s = h.source->_pull_handle();
 
-  //std::cout << "push " << h_data << ' ' << h_size << std::endl;
+  auto& s = src._node->_span_handle();
 
-  HF_THROW_IF(s.d_data == nullptr || s.d_size < h_size,
-    "invalid memory push from ", h.source->_name, " to ", name()
-  ); 
+  auto ptr = static_cast<char*>(s.d_data) + offset;
 
   HF_CHECK_CUDA(
     cudaMemcpyAsync(
-      h_data, s.d_data, h_size, cudaMemcpyDeviceToHost, stream
+      tgt, ptr, bytes, cudaMemcpyDeviceToHost, stream
     ),
-    "failed to push memory in task '", name(), '\''
+    "copy (D2H) task '", name(), "' failed\n",
+    "target host/size: ", tgt, '/', bytes, '\n',
+    "source span/size/offset: ", s.d_data, '/', s.d_size, '/', offset
+  );
+}
+
+// Procedure: _d2d
+inline void CopyTask::_d2d(
+  SpanTask tgt, size_t t_offset, 
+  SpanTask src, size_t s_offset, 
+  size_t bytes,
+  cudaStream_t stream
+) {
+    
+  auto& t = tgt._node->_span_handle();
+  auto& s = src._node->_span_handle();
+    
+  auto tptr = static_cast<char*>(t.d_data) + t_offset;
+  auto sptr = static_cast<char*>(s.d_data) + s_offset;
+    
+  HF_CHECK_CUDA(
+    cudaMemcpyAsync(
+      tptr, sptr, bytes, cudaMemcpyDeviceToDevice, stream
+    ),
+    "copy (D2D) task '", name(), "' failed\n",
+    "target span/size/offset: ", t.d_data, '/', t.d_size, '/', t_offset, '\n',
+    "source span/size/offset: ", s.d_data, '/', s.d_size, '/', s_offset, '\n',
+    "bytes to copy: ", bytes
   );
 }
 
 // ----------------------------------------------------------------------------
 
 /**
-@class TransferTask
-@brief handle of a transfer task on two GPU memory
+@class FillTask
+@brief handle of a fill task on two GPU memory
 */
-class TransferTask : public TaskBase<TransferTask> {
+class FillTask : public TaskBase<FillTask> {
 
   friend class TaskBase<HostTask>;
-  friend class TaskBase<PullTask>;
-  friend class TaskBase<PushTask>;
-  friend class TaskBase<TransferTask>;
+  friend class TaskBase<SpanTask>;
+  friend class TaskBase<CopyTask>;
+  friend class TaskBase<FillTask>;
   friend class TaskBase<KernelTask>;
 
   friend class FlowBuilder;
   
-  using node_handle_t = Node::Push;
+  using node_handle_t = Node::Copy;
 
   public:
 
     /**
-    @brief constructs an empty push task handle
+    @brief constructs an empty copy task handle
     */
-    TransferTask() = default;
+    FillTask() = default;
     
     /**
     @brief copy constructor
     */
-    TransferTask(const TransferTask&) = default;
+    FillTask(const FillTask&) = default;
 
     /**
     @brief copy assignment
     */
-    TransferTask& operator = (const TransferTask&) = default;
+    FillTask& operator = (const FillTask&) = default;
     
     /**
-    @brief alters the host memory block to push from gpu
-    
-    @tparam ArgsT argements types
-
-    @param dst a destination pull task
-    @param dst_offset offset to the starting point of the destination memory
-    @param src a source pull task
-    @param src_offset offset to the starting point of the source memory
-    @param size bytes to transfer from the source to the destination
+    @brief fills each byte in a span with a value
     */
-    template <typename OT, typename OS, typename N>
-    TransferTask transfer(
-      PullTask dst, OT&& dst_offset, PullTask src, OS&& src_offset, N&& size
-    );
-
+    template <typename N, typename V>
+    FillTask fill(SpanTask span, N&& bytes, V&& value);
+    
+    /**
+    @brief fills each byte in a span with a value
+    */
+    template <typename O, typename N, typename V>
+    FillTask fill(SpanTask span, O&& offset, N&& bytes, V&& value);
+    
   private:
 
-    TransferTask(Node* node);
- 
-    void _invoke_transfer(cudaStream_t, size_t, size_t, size_t);
+    FillTask(Node* node);
 
+    void _fill(SpanTask, size_t, size_t, int, cudaStream_t);
 };
 
 // Constructor
-inline TransferTask::TransferTask(Node* node) : 
+inline FillTask::FillTask(Node* node) : 
   TaskBase::TaskBase {node} {
 }
 
-// Function: transfer 
-template <typename OT, typename OS, typename N>
-TransferTask TransferTask::transfer(
-  PullTask target, OT&& ot, PullTask source, OS &&os, N&& size
-) {
+// Function: fill
+template <typename N, typename V>
+FillTask FillTask::fill(SpanTask span, N&& bytes, V&& value) {
+  
+  HF_THROW_IF(!_node, "fill task can't be empty");
+  HF_THROW_IF(!span, "target span task can't be empty");
+  
+  auto& h = _node->_fill_handle();
 
-  HF_THROW_IF(!_node,  "transfer task can't be empty");
-  HF_THROW_IF(!source, "source task can't be empty");
-  HF_THROW_IF(!target, "target task can't be empty");
-
-  auto& h = _node->_transfer_handle();
-    
-  h.source = source._node;
-  h.target = target._node;
+  h.span = span._node;
 
   h.work = [
-    task = *this, 
-    ot   = std::forward<OT>(ot), 
-    os   = std::forward<OS>(os), 
-    size = std::forward<N>(size)
+    task  = *this, 
+    span  = span,
+    bytes = std::forward<N>(bytes),
+    value = std::forward<V>(value)
   ] (cudaStream_t stream) mutable {
-    task._invoke_transfer(stream, ot, os, size);
+    task._fill(span, 0, bytes, value, stream);
   };
 
   return *this;
 }
 
-// Procedure: _invoke_transfer 
-inline void TransferTask::_invoke_transfer(
-  cudaStream_t stream, size_t ot, size_t os, size_t size
-) {
- 
-  // get the handle and device memory
-  auto& h = _node->_transfer_handle();
-  auto& source = h.source->_pull_handle();
-  auto& target = h.target->_pull_handle();
+template <typename O, typename N, typename V>
+FillTask FillTask::fill(SpanTask span, O&& offset, N&& bytes, V&& value) {
+  
+  HF_THROW_IF(!_node, "fill task can't be empty");
+  HF_THROW_IF(!span, "target span task can't be empty");
+  
+  auto& h = _node->_fill_handle();
 
-  HF_THROW_IF(source.d_data == nullptr || target.d_data == nullptr,
-    "invalid memory transfer from ", h.source->_name, " to ", name()
-  ); 
+  h.span = span._node;
 
-  auto from_ptr = static_cast<unsigned char*>(source.d_data) + os;
-  auto to_ptr = static_cast<unsigned char*>(target.d_data) + ot;
+  h.work = [
+    task  = *this, 
+    span  = span,
+    offset= std::forward<O>(offset),
+    bytes = std::forward<N>(bytes),
+    value = std::forward<V>(value)
+  ] (cudaStream_t stream) mutable {
+    task._fill(span, offset, bytes, value, stream);
+  };
 
-  HF_CHECK_CUDA(
-    cudaMemcpyAsync(
-      to_ptr, from_ptr, size, cudaMemcpyDeviceToDevice, stream
-    ),
-    "failed to transfer memory in task '", name(), '\''
-  );
+  return *this;
 }
 
+// Procedure: _fill
+inline void FillTask::_fill(
+  SpanTask span, size_t offset, size_t bytes, int v, cudaStream_t stream
+) {
+
+  auto& h = span._node->_span_handle();
+
+  auto ptr = static_cast<char*>(h.d_data) + offset;
+
+  HF_CHECK_CUDA(
+    cudaMemsetAsync(ptr, v, bytes, stream),
+    "fill task '", name(), "' failed\n",
+    "target span/size/offset: ", h.d_data, '/', h.d_size, '/', offset, '\n',
+    "filled value/bytes: ", v, '/', bytes
+  );
+}
 
 // ----------------------------------------------------------------------------
 
@@ -774,9 +879,9 @@ inline void TransferTask::_invoke_transfer(
 class KernelTask : public TaskBase<KernelTask> {
   
   friend class TaskBase<HostTask>;
-  friend class TaskBase<PullTask>;
-  friend class TaskBase<PushTask>;
-  friend class TaskBase<TransferTask>;
+  friend class TaskBase<SpanTask>;
+  friend class TaskBase<CopyTask>;
+  friend class TaskBase<FillTask>;
   friend class TaskBase<KernelTask>;
 
   friend class FlowBuilder;
@@ -801,7 +906,7 @@ class KernelTask : public TaskBase<KernelTask> {
     KernelTask& operator = (const KernelTask&) = default;
     
     /**
-    @brief assign a kernel
+    @brief offloads computations onto a kernel
 
     @tparam G grid type
     @tparam B block type
@@ -809,9 +914,9 @@ class KernelTask : public TaskBase<KernelTask> {
     @tparam F kernel function type
     @tparam ArgsT... kernel function argument types
     
-    @param grid argument to construct a grid of type dim3
-    @param block argument to construct a block of type dim3
-    @param shm argument to construct a shared memory size of type size_t
+    @param grid arguments to construct the grid of type dim3
+    @param block arguments to construct the block of type dim3
+    @param shm argument to construct the shared memory size of type size_t
     @param func kernel function
     @param args... arguments to forward to the kernel function
 
@@ -831,10 +936,10 @@ class KernelTask : public TaskBase<KernelTask> {
     template <typename T>
     auto _to_argument(T&& t);
     
-    PointerCaster _to_argument(PullTask);
+    PointerCaster _to_argument(SpanTask);
     
     void _gather_sources(void);
-    void _gather_sources(PullTask);
+    void _gather_sources(SpanTask);
     
     template <typename T>
     void _gather_sources(T&&);
@@ -863,8 +968,8 @@ auto KernelTask::_to_argument(T&& t) {
 }
 
 // Function: _to_argument
-inline PointerCaster KernelTask::_to_argument(PullTask task) { 
-  HF_THROW_IF(!task, "pull task is empty");
+inline PointerCaster KernelTask::_to_argument(SpanTask task) { 
+  HF_THROW_IF(!task, "span task is empty");
   return PointerCaster{task._d_data()}; 
 }
 
@@ -878,8 +983,8 @@ void KernelTask::_gather_sources(T&&) {
 }
 
 // Procedure: _gather_sources
-void KernelTask::_gather_sources(PullTask task) {
-  HF_THROW_IF(!_node, "kernel task cannot operate on empty pull task");
+void KernelTask::_gather_sources(SpanTask task) {
+  HF_THROW_IF(!_node, "kernel task cannot operate on empty span task");
   _node->_kernel_handle().sources.push_back(task._node);
 }
     
@@ -907,10 +1012,10 @@ void KernelTask::_invoke_kernel(
   f<<<g, b, s, stream>>>(_to_argument(std::get<I>(t))...);
 
 	HF_CHECK_CUDA(cudaPeekAtLastError(), 
-    "failed to launch kernel (grid=",
-    g.x, 'x', g.y, 'x', g.z, ", block=",
-    b.x, 'x', b.y, 'x', b.z, ", shm=",
-    s, ") in task '", name(), '\''
+    "failed to launch kernel task '", name(), "'\n",
+    "grid=", g.x, 'x', g.y, 'x', g.z, '\n',
+    "block=", b.x, 'x', b.y, 'x', b.z, '\n',
+    "shm=", s
   );
 }
 
@@ -943,10 +1048,10 @@ KernelTask KernelTask::kernel(
   
   auto& h = _node->_kernel_handle();
   
-  // clear the source pull tasks
+  // clear the source span tasks
   h.sources.clear();
   
-  // extract source pull tasks
+  // extract source span tasks
   _gather_sources(args...);
   
   // assign kernel work. here we create a task to avoid dangling ref

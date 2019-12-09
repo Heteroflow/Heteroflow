@@ -81,15 +81,13 @@ inline Heteroflow::~Heteroflow() {
 
   for(auto& n : _graph) {
     auto idx = n->_handle.index();
-    if(idx == Node::PULL_IDX) {
-      auto& h = n->_pull_handle();
+    if(idx == Node::SPAN_IDX) {
+      auto& h = n->_span_handle();
       assert(h.device == -1);
       assert(h.d_data == nullptr);
       assert(h.d_size == 0);
       //assert(h.height == 0);
       //assert(h.parent == nullptr);
-    }
-    else if(idx == Node::PUSH_IDX) {
     }
     else if(idx == Node::KERNEL_IDX) {
       auto& h = n->_kernel_handle();
