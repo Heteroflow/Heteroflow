@@ -8,7 +8,7 @@ concurrent CPU-GPU programs using task models
 Parallel CPU-GPU programming is never an easy job 
 due to difficult concurrency details.
 Heteroflow helps you deal with this challenge through a new programming model
-using modern C++ and Nvidia CUDA Toolkit.
+using modern C++ and [Nvidia CUDA Toolkit][cuda-toolkit].
 
 # Table of Contents
 
@@ -84,12 +84,12 @@ Heteroflow is header-only. Simply copy the entire folder
 [heteroflow/](heteroflow/) to your project and add the include path accordingly.
 
 
-
 # Create a Heteroflow Application
 
 Heteroflow manages concurrent CPU-GPU programming 
 using a *task dependency graph* model.
-Each node in the graph represents either a CPU (host) task or a GPU (device) task.
+Each node in the graph represents either a CPU (host) task 
+or a GPU (device) task.
 Each edge indicates
 a dependency constraint between two tasks.
 Most applications are developed through the following steps:
@@ -100,21 +100,14 @@ Create a heteroflow object to build a task dependency graph:
 
 ```cpp
 hf::Heteroflow hf;
-```
-
-You can name a heteroflow for debugging purpose.
-
-```cpp
-hf::Heteroflow hf("MyHeteroflow");
-hf.name("MyHeteroflow");
-std::cout << hf.name();
+hf.name("MyHeteroflow");  // assigns a name to the heteroflow object
 ```
 
 Each task belongs to one of the following categories: 
 *host*, *span*, *fill*, *copy*, and *kernel*.
 
 
-### Host Task
+### Task Type #1: Host Task
 
 A host task is a callable for which [std::invoke][std::invoke] is applicable
 on any CPU core.
@@ -123,7 +116,7 @@ on any CPU core.
 hf::HostTask host = heteroflow.host([](){ std::cout << "my host task\n"; });
 ```
 
-### Span Task
+### Task Type #2: Span Task
 
 A span task allocates memory on a GPU device. 
 The following example creates a span task that allocates
@@ -151,7 +144,7 @@ efficient task graphs with transparent scalability to manycore CPUs
 and multiple GPUs.
 
  
-### Fill Task
+### Task Type #3: Fill Task
 
 A fill task sets GPU memory managed by a span task to a value.
 The following code example creates fill tasks that sets each byte
@@ -165,7 +158,7 @@ hf::FillTask fill1 = hf.fill(span, 1024, 0);
 hf::FillTask fill2 = hf.fill(span, 1000, 20, 0);  
 ```
 
-### Copy Task
+### Task Type #4: Copy Task
 
 A copy task performs data transfers in one of the three directions,
 *host to device* (H2D), *device to device* (D2D), and *device to host* (D2H).
@@ -213,7 +206,7 @@ hf::CopyTask d2d4 = copy(tgt_span, 20, src_span, 10, 100);
 ```
 
 
-### Kernel Task
+### Task Type #5: Kernel Task
 
 A kernel task offloads a kernel function to a GPU device.
 Heteroflow abstracts GPU memory through span tasks 
@@ -258,6 +251,23 @@ that is commensurate with their domain knowledge.
 Users focus on developing high-performance kernel tasks using 
 the native CUDA programming toolkit,
 while leaving task parallelism to Heteroflow.
+
+### Access/Modify Task Attributes
+
+You can query or modify the attributes of a task directly
+from its handle.
+
+```cpp
+// names a task and queries the task name
+task.name("my task");
+std::cout << task.name();
+
+// queries if a task is empty
+std::cout << "task is empty? " << (task.empty() ? "yes" : "no");
+
+// queries the in/out degree of a task
+std::cout << task.num_successors() << '/' << task.num_dependents();
+```
 
 ## Step 2: Define Task Dependencies
 
@@ -325,9 +335,13 @@ each representing a specific part of your parallel decomposition.
 
 ## Stateful Execution
 
-Heteroflow allows users to pass variables in reference through [std::ref][std::ref]
-for *stateful* execution,
-enabling flexible runtime controls and *fine-grained* task parallelism.
+When you create a task, the heteroflow object marshals all arguments
+along with a unique task execution function to form a 
+*stateful closure* using C++ lambda and reference wrapper [std::ref][std::ref].
+Any changes on referenced variables will be visible to the execution
+context of the task.
+Stateful execution enables *flexible runtime controls*
+and *fine-grained* task parallelism.
 Users can partition a large workload into small parallel blocks and append
 dependencies between tasks to keep variable states consistent.
 Below the code snippet demonstrates this concept.
@@ -340,7 +354,7 @@ size_t size{0};
 dim3 grid;
 
 auto host = heteroflow.host([&] () {     // captures everything by reference
-  data = new float[1000];                // changes size and data at runtime
+  data = new float[1000];                // changes data and size at runtime
   size = 1000*sizeof(int);
   grid = (1000+256-1)/256;               // changes the kernel execution shape
 });
@@ -354,12 +368,11 @@ auto kernel = heteroflow.kernel(std::ref(grid), 256, 0, my_kernel, span, 1000)
                         .succeed(span);
 ```
 
-When you create a task, the heteroflow object marshals all arguments
-along with a unique task execution function to form a *stateful lambda closure*.
-Any changes on a referenced variable will be visible to the execution
-context of the task.
-All the arguments, except `SpanTask`, forwarded to each task construction method
+All the arguments, except `SpanTask`, 
+forwarded to each task construction method
 can be made stateful using [std::ref][std::ref].
+
+
 
 
 # Visualize a Heteroflow Graph
@@ -375,7 +388,6 @@ hf::Heteroflow hf;
 auto ha = hf.host([](){}).name("allocate_a");
 auto hb = hf.host([](){}).name("allocate_b");
 auto hc = hf.host([](){}).name("allocate_c");
-
 auto sa = hf.span(1024).name("span_a");
 auto sb = hf.span(1024).name("span_b");
 auto sc = hf.span(1024).name("span_c");
@@ -390,7 +402,7 @@ cc.succeed(hc);
 hf.dump(std::cout);  // dump the graph to a DOT format through standard output
 ```
 
-The program generates the following graph visualized by 
+The program generates the following graph drawn by 
 [Graphviz Online](https://dreampuf.github.io/GraphvizOnline/):
 
 <img align="right" src="images/visualization.png" width="50%">
@@ -471,6 +483,7 @@ Heteroflow is licensed under the [MIT License](./LICENSE).
 [std::future]:           https://en.cppreference.com/w/cpp/thread/future
 [cuda-zone]:             https://developer.nvidia.com/cuda-zone
 [nvcc]:                  https://developer.nvidia.com/cuda-llvm-compiler
+[cuda-toolkit]:          https://developer.nvidia.com/cuda-toolkit
 
 [GitHub issues]:         https://github.com/heteroflow/heteroflow/issues
 [GitHub insights]:       https://github.com/heteroflow/heteroflow/pulse

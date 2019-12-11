@@ -336,7 +336,7 @@ inline void Node::dump(std::ostream& os) const {
     // kernel
     case 3:
       os << " style=\"filled\""
-         << " fillcolor=\"black\""
+         << " color=\"white\" fillcolor=\"black\""
          << " fontcolor=\"white\""
          << " shape=\"box3d\"";
     break;
