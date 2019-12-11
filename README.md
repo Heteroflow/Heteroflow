@@ -6,8 +6,9 @@ concurrent CPU-GPU programs using task models
 # Why Heteroflow?
 
 Parallel CPU-GPU programming is never an easy job 
-due to difficult concurrency details.
-Heteroflow helps you deal with this challenge through a new programming model
+because of many difficult concurrency details.
+Heteroflow helps you deal with this challenge 
+through a new *task-based* programming model
 using modern C++ and [Nvidia CUDA Toolkit][cuda-toolkit].
 
 # Table of Contents
@@ -82,6 +83,8 @@ Compile and run the code with the following commands:
 
 Heteroflow is header-only. Simply copy the entire folder 
 [heteroflow/](heteroflow/) to your project and add the include path accordingly.
+See [System Requirements](#system-requirements)
+for detailed system specification and compliation environment.
 
 
 # Create a Heteroflow Application
