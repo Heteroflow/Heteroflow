@@ -341,10 +341,10 @@ through an efficient *work-stealing* algorithm.
 hf::Executor executor;
 ```
 
-You can configure an executor to operate on a fixed number of
-CPU cores and GPUs.
+You can configure an executor to operate on a fixed degree of CPU-GPU 
+parallelism.
 The code below creates 32 worker threads to schedule and execute CPU tasks
-and 4 worker threads for GPU tasks.
+and 4 worker threads for the GPU counterpart.
 
 ```cpp
 hf::Executor executor(32, 4);  // 32 and 4 threads to work on CPU and GPU tasks, respectively
@@ -358,10 +358,10 @@ to let you query the execution status.
 All executor methods are *thread-safe*.
 
 ```cpp
-std::future<void> r1 = executor.run(heteroflow);       // run the heteroflow once
-std::future<void> r2 = executor.run_n(heteroflow, 2);  // run the heteroflow twice
+std::future<void> r1 = executor.run(heteroflow);       // run heteroflow once
+std::future<void> r2 = executor.run_n(heteroflow, 2);  // run heteroflow twice
 
-// keep running until the predicate becomes true (4 times in this example)
+// keep running heteroflow until the predicate becomes true (4 times in this example)
 executor.run_until(heteroflow, [counter=4](){ return --counter == 0; } );
 ```
 
@@ -371,10 +371,10 @@ You can call `wait_for_all` to block the executor until all associated heteroflo
 executor.wait_for_all();  // blocks until all running heteroflows finish
 ```
 
-Notice that executor does not own any heteroflow. 
+Notice that executor does not own any heteroflows. 
 It is your responsibility to keep a heteroflow alive during its execution,
 or it can result in undefined behavior.
-For instance, the code below can result in undefined behavior.
+For instance, the code below can lead to crash.
 
 ```cpp
 hf::Executor executor;
@@ -396,8 +396,8 @@ along with a unique task execution function to form a
 *stateful closure* using C++ lambda and reference wrapper [std::ref][std::ref].
 Any changes on referenced variables will be visible to the execution
 context of the task.
-Stateful execution enables *flexible runtime controls*
-and *fine-grained* task parallelism.
+Stateful execution enables flexible runtime controls
+for *fine-grained* task parallelism.
 Users can partition a large workload into small parallel blocks and append
 dependencies between tasks to keep variable states consistent.
 Below the code snippet demonstrates this concept.
@@ -424,9 +424,9 @@ auto kernel = heteroflow.kernel(std::ref(grid), 256, 0, my_kernel, span, 1000)
                         .succeed(span);
 ```
 
-All the arguments, except `SpanTask`, 
+All the arguments, except `SpanTask` which is always captured by copy, 
 forwarded to each task construction method
-can be made stateful using [std::ref][std::ref].
+can be made stateful through [std::ref][std::ref].
 
 
 
@@ -436,7 +436,7 @@ can be made stateful using [std::ref][std::ref].
 Visualization is a great way to inspect a task graph
 for refinement or debugging purpose.
 You can dump a heteroflow graph to a [DOT format][dot-format]
-and visualize it through free [GraphViz][GraphViz] tools.
+and visualize it through free online [GraphViz][GraphViz] tools.
 
 ```cpp
 hf::Heteroflow hf;
