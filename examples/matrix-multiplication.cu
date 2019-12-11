@@ -66,6 +66,8 @@ auto gpu(int M, int N, int K) {
   op.succeed(sa, sb, sc).precede(cc);
   cc.succeed(hc);
 
+  hf.dump(std::cout);
+
   executor.run(hf).wait();
   
   return c;  

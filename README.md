@@ -3,19 +3,26 @@
 A header-only C++ library to help you quickly write
 concurrent CPU-GPU programs using task models
 
-:exclamation: This is a working repository with many things under construction,
-but with enough information to highlight the spirit of Heteroflow.
-
 # Why Heteroflow?
 
-Modern high-performance computing leverages a heterogeneous mix of 
-both CPU and GPU devices.
-However, concurrent CPU-GPU programming is notoriously difficult
-due to many implementation details.
+Parallel CPU-GPU programming is never an easy job 
+due to difficult concurrency details.
 Heteroflow helps you deal with this challenge through a new programming model
 using modern C++ and Nvidia CUDA Toolkit.
 
-# Write your First Heteroflow Program
+# Table of Contents
+
+* [Write Your First Heteroflow Program](#write-your-first-heteroflow-program)
+* [Create a Heteroflow Application](#create-a-heteroflow-application)
+   * [Step 1: Create a Heteroflow Graph](#step-1-create-a-heteroflow-graph)
+   * [Step 2: Define Task Dependencies](#step-2-define-task-dependencies)
+   * [Step 3: Execute a Heteroflow](#step-3-execute-a-heteroflow)
+* [Visualize a Heteroflow Graph](#visualize-a-heteroflow-graph)
+* [Compile Unit Tests and Examples](#compile-unit-tests-and-examples)
+* [System Requirements](#system-requirements)
+* [Get Involved](#get-involved)
+
+# Write Your First Heteroflow Program
 
 The following example [saxpy.cu](./examples/saxpy.cu) implements
 the canonical single-precision A·X Plus Y ("saxpy") operation.
@@ -41,21 +48,21 @@ int main(void) {
   
   auto host_x = hf.host([&]{ x = create_vector(N, 1.0f); });
   auto host_y = hf.host([&]{ y = create_vector(N, 2.0f); }); 
-  auto pull_x = hf.pull(std::ref(x), B);
-  auto pull_y = hf.pull(std::ref(y), B);
-  auto kernel = hf.kernel((N+255)/256, 256, 0, saxpy, N, 2.0f, pull_x, pull_y);
-  auto push_x = hf.push(std::ref(x), pull_x, B);
-  auto push_y = hf.push(std::ref(y), pull_y, B);
+  auto span_x = hf.span(std::ref(x), B);
+  auto span_y = hf.span(std::ref(y), B);
+  auto kernel = hf.kernel((N+255)/256, 256, 0, saxpy, N, 2.0f, span_x, span_y);
+  auto copy_x = hf.copy(std::ref(x), span_x, B);
+  auto copy_y = hf.copy(std::ref(y), span_y, B);
   auto verify = hf.host([&]{ verify_result(x, y, N); });
   auto kill_x = hf.host([&]{ delete_vector(x); });
   auto kill_y = hf.host([&]{ delete_vector(y); });
 
-  host_x.precede(pull_x);                 // host tasks run before pull tasks
-  host_y.precede(pull_y);
-  kernel.precede(push_x, push_y)          // kernel runs before/after push/pull tasks
-        .succeed(pull_x, pull_y); 
-  verify.precede(kill_x, kill_y)          // verifier runs before/after kill/push tasks
-        .succeed(push_x, push_y); 
+  host_x.precede(span_x);                 // host tasks run before span tasks
+  host_y.precede(span_y);
+  kernel.precede(copy_x, copy_y)          // kernel runs before/after copy/span tasks
+        .succeed(span_x, span_y); 
+  verify.precede(kill_x, kill_y)          // verifier runs before/after kill/copy tasks
+        .succeed(copy_x, copy_y); 
 
   executor.run(hf).wait();                // execute the task dependency graph
 }
@@ -76,12 +83,15 @@ Compile and run the code with the following commands:
 Heteroflow is header-only. Simply copy the entire folder 
 [heteroflow/](heteroflow/) to your project and add the include path accordingly.
 
+
+
 # Create a Heteroflow Application
 
 Heteroflow manages concurrent CPU-GPU programming 
 using a *task dependency graph* model.
-Each node in the graph represents a task and each edge indicates
-a dependency constraint between two nodes.
+Each node in the graph represents either a CPU (host) task or a GPU (device) task.
+Each edge indicates
+a dependency constraint between two tasks.
 Most applications are developed through the following steps:
 
 ## Step 1: Create a Heteroflow Graph
@@ -89,11 +99,19 @@ Most applications are developed through the following steps:
 Create a heteroflow object to build a task dependency graph:
 
 ```cpp
-hf::Heteroflow heteroflow;
+hf::Heteroflow hf;
+```
+
+You can name a heteroflow for debugging purpose.
+
+```cpp
+hf::Heteroflow hf("MyHeteroflow");
+hf.name("MyHeteroflow");
+std::cout << hf.name();
 ```
 
 Each task belongs to one of the following categories: 
-*host*, *pull*, *push*, *kernel*, and *transfer*.
+*host*, *span*, *fill*, *copy*, and *kernel*.
 
 
 ### Host Task
@@ -105,88 +123,141 @@ on any CPU core.
 hf::HostTask host = heteroflow.host([](){ std::cout << "my host task\n"; });
 ```
 
-### Pull Task
+### Span Task
 
-A pull task allocates memory on a GPU and copies
-data from the host to the GPU.
-
-```cpp
-float* data = new float[10];
-hf::PullTask pull = heteroflow.pull(data, 10*sizeof(float));
-```
-
-If the data pointer is given a `nullptr`, 
-the pull task only allocates a GPU memory area of the given bytes.
-In this case, you can give an additional value to initialize 
-for *each byte* of the memory.
+A span task allocates memory on a GPU device. 
+The following example creates a span task that allocates
+256 bytes of an uninitialized storage on a GPU device.
 
 ```cpp
-hf::PullTask gpu_mem1 = heteroflow.pull(nullptr, 256);
-hf::PullTask gpu_mem2 = heteroflow.pull(nullptr, 256, 0); 
+hf::SpanTask span = hf.span(256);
 ```
+
+Alternatively, you can create a span task to allocate an initialized storage
+from a host memory area.
+The code blow creates a span task that allocates a device memory block
+with size and value equal to the data in `vec`.
+
+
+```cpp
+std::vector<int> vec(256, 0);
+hf::SpanTask span = hf.span(vec.data(), 256*sizeof(int));
+```
+
+Heteroflow performs GPU memory operations through *span* tasks
+rather than raw pointers.
+This layer of abstraction allows users to focus on building
+efficient task graphs with transparent scalability to manycore CPUs 
+and multiple GPUs.
+
  
-### Push Task
+### Fill Task
 
-A push task copies GPU data in a pull task back to a host memory area.
-
-```cpp
-hf::PushTask push = heteroflow.push(data, pull, 10*sizeof(float));
-```
-
-You can give an *offset* in bytes to indicate the starting point
-of the push operation.
-The code snippet below skips the first three floats and
-copies the remaining seven floats from a memory block of a pull task
-to a host memory area pointed by data.
+A fill task sets GPU memory managed by a span task to a value.
+The following code example creates fill tasks that sets each byte
+to zero in the specified range of a GPU memory block managed by a span task.
 
 ```cpp
-hf::PushTask push = heteroflow.push(data, pull, 3*sizeof(float), 7*sizeof(float))
+// sets each byte in [0, 1024) of span to 0
+hf::FillTask fill1 = hf.fill(span, 1024, 0);      
+
+// sets each byte in [1000, 1020) of span to 0
+hf::FillTask fill2 = hf.fill(span, 1000, 20, 0);  
 ```
+
+### Copy Task
+
+A copy task performs data transfers in one of the three directions,
+*host to device* (H2D), *device to device* (D2D), and *device to host* (D2H).
+The following example creates copy tasks that transfer
+data from the host memory area to a GPU memory block managed by a span task.
+
+```cpp
+std::string str("H2D data transfers");
+
+// copies the entire string to the span
+hf::CopyTask h2d1 = hf.copy(span, str.data(), str.size());  
+
+// copies [10, 13) bytes (characters) from span to the host string
+hf::CopyTask h2d2 = hf.copy(span, 10, str.data(), 3);       
+```
+
+The following example creates copy tasks that transfer
+data from a GPU memory block managed by a span task to a host memory area.
+
+```cpp
+std::string str("D2H data transfers");
+
+// copies 10 bytes from span to the host string
+hf::CopyTask d2h1 = hf.copy(str.data(), span, 10);
+
+// copies 10 bytes from [5, 15) of span to the host string
+hf::CopyTask d2h2 = hf.copy(str.data(), span, 5, 10);
+```
+
+The following example creates copy tasks that transfer data between
+two GPU memory blocks managed by two span tasks.
+
+```cpp
+// copies 100 bytes from src_span to tgt_span
+hf::CopyTask d2d1 = copy(tgt_span, src_span, 100);
+
+// copies 100 bytes from [5, 105) of src_span to tgt_span
+hf::CopyTask d2d2 = copy(tgt_span, src_span, 5, 100);
+
+// copies 100 bytes from src_span to [10, 110) of tgt_span
+hf::CopyTask d2d3 = copy(tgt_span, 10, src_span, 100);
+
+// copies 100 bytes from [10, 110) of src_span to [20, 120) of tgt_span
+hf::CopyTask d2d4 = copy(tgt_span, 20, src_span, 10, 100);
+```
+
 
 ### Kernel Task
 
 A kernel task offloads a kernel function to a GPU device.
-Heteroflow abstracts GPU memory through pull tasks 
-to perform automatic device mapping and memory allocation at runtime.
-Each pull task will implicitly convert to the pointer type in the corresponding
-argument entry of the kernel function.
+Heteroflow abstracts GPU memory through span tasks 
+to facilitate the design of task scheduling with automatic GPU device mapping.
+Each span task manages a GPU memory pointer that
+will implicitly convert to the pointer type 
+of the corresponding entry in binding a kernel task to a kernel function.
+The example below demonstrates the creation of a kernel task.
 
 ```cpp
-__global__ void my_kernel(float* data, int N);
+// GPU kernel to set each entry of an integer array to a given value
+__global__ void gpu_set(int* data, size_t N, int value) {
+  int i = blockIdx.x*blockDim.x + threadIdx.x;
+  if (i < N) {
+    data[i] = value;
+  }
+}
 
-dim3 grid {1, 1, 1}, block {10, 1, 1};
-size_t shared_memory {0};
+// creates a span task to allocates a raw storage of 65536 integers
+hf::SpanTask span = hf.span(65536*sizeof(int));
 
-// implicit coversion of pull to float*
-hf::KernelTask k1 = hf.kernel(grid, block, shared_memory, my_kernel, pull, 10); 
+// kernel execution configuration
+dim3 grid  {(65536+256-1)/256, 1, 1};
+dim3 block {256, 1, 1};
+size_t Ns  {0};
+
+// creates a kernel task to offload gpu_set to a GPU device
+hf::KernelTask k1 = hf.kernel(
+  grid,           // dimension of the grid
+  block,          // dimension of the block
+  shared_memory,  // number of bytes in shared memory
+  gpu_set,        // kernel function to offload
+  span,           // 1st argument to pass to the kernel function
+  65536,          // 2nd argument to pass to the kernel function
+  1               // 3rd argument to pass to the kernel function
+); 
 ```
 
 Heteroflow gives users full privileges to 
 craft a [CUDA][cuda-zone] kernel 
 that is commensurate with their domain knowledge.
-Users focus on developing high-performance kernels and 
-CPU tasks using native CUDA toolkits,
+Users focus on developing high-performance kernel tasks using 
+the native CUDA programming toolkit,
 while leaving task parallelism to Heteroflow.
-
-### Transfer Task
-
-A transfer task copies GPU data from a source pull task to a target pull task.
-The code snippet blow copies data from `[ptr2+56, ptr2+256)` 
-to `[ptr1+10, ptr1+210)`, assuming `ptr1` and `ptr2` point to the beginning
-address of the GPU memory in `pull1` and `pull2`, respectively.
-
-```cpp
-hf::PullTask pull1 = heteroflow.pull(nullptr, 256, 'a');
-hf::PullTask pull2 = heteroflow.pull(nullptr, 256, 'b'); 
-
-hf::TransferTask transfer = hteroflow.transfer(
-  pull1,    // destination pull task
-  10,       // offset at the destination memory block
-  pull2,    // source pull task
-  56,       // offset at the source memory block
-  200       // bytes to copy from the source to the destination
-);
-```
 
 ## Step 2: Define Task Dependencies
 
@@ -254,37 +325,98 @@ each representing a specific part of your parallel decomposition.
 
 ## Stateful Execution
 
-Heteroflow allows users to capture variables in reference through [std::ref][std::ref]
+Heteroflow allows users to pass variables in reference through [std::ref][std::ref]
 for *stateful* execution,
-enabling flexible runtime controls and fine-grained task parallelism.
+enabling flexible runtime controls and *fine-grained* task parallelism.
 Users can partition a large workload into small parallel blocks and append
 dependencies between tasks to keep variable states consistent.
 Below the code snippet demonstrates this concept.
 
 ```cpp
-__global my_kernel(PullTask, size_t N);  // custom kernel
+__global my_kernel(int* ptr, size_t N);  // custom kernel
 
-float* data{nullptr};
+int* data {nullptr};
 size_t size{0};
 dim3 grid;
 
-auto host = heteroflow.host([&](){       // captures everything by reference
+auto host = heteroflow.host([&] () {     // captures everything by reference
   data = new float[1000];                // changes size and data at runtime
-  size = 1000*sizeof(float);
-  grid = (1000+255)/256;                 // changes the kernel execution shape
+  size = 1000*sizeof(int);
+  grid = (1000+256-1)/256;               // changes the kernel execution shape
 });
 
 // new data and size values are visible to this pull task's execution context
-auto pull = heteroflow.pull(std::ref(data), std::ref(size))
+auto span = heteroflow.span(std::ref(data), std::ref(size))
                       .succeed(host);
 
-// new grid size is visible to this kernel tasks' execution context
-auto kernel = heteroflow.kernel(std::ref(grid), 256, 0, my_kernel, pull, 1000)
-                        .succeed(pull);
+// new grid size is visible to this kernel task's execution context
+auto kernel = heteroflow.kernel(std::ref(grid), 256, 0, my_kernel, span, 1000)
+                        .succeed(span);
 ```
 
-The variables to forward to other tasks can be made stateful
-in a similar fashion.
+When you create a task, the heteroflow object marshals all arguments
+along with a unique task execution function to form a *stateful lambda closure*.
+Any changes on a referenced variable will be visible to the execution
+context of the task.
+All the arguments, except `SpanTask`, forwarded to each task construction method
+can be made stateful using [std::ref][std::ref].
+
+
+# Visualize a Heteroflow Graph
+
+Visualization is a great way to inspect a task graph
+for refinement or debugging purpose.
+You can dump a heteroflow graph to a [DOT format][dot-format]
+and visualize it through free [GraphViz][GraphViz] tools.
+
+```cpp
+hf::Heteroflow hf;
+
+auto ha = hf.host([](){}).name("allocate_a");
+auto hb = hf.host([](){}).name("allocate_b");
+auto hc = hf.host([](){}).name("allocate_c");
+
+auto sa = hf.span(1024).name("span_a");
+auto sb = hf.span(1024).name("span_b");
+auto sc = hf.span(1024).name("span_c");
+auto op = hf.kernel({(1024+32-1)/32}, 32, 0, fn_kernel, sa, sb, sc).name("kernel");
+auto cc = hf.copy(host_data, sc, 1024).name("copy_c");
+  
+ha.precede(sa);
+hb.precede(sb);
+op.succeed(sa, sb, sc).precede(cc);
+cc.succeed(hc);
+
+hf.dump(std::cout);  // dump the graph to a DOT format through standard output
+```
+
+The program generates the following graph visualized by 
+[Graphviz Online](https://dreampuf.github.io/GraphvizOnline/):
+
+<img align="right" src="images/visualization.png" width="50%">
+
+```bash
+digraph p0x7ffc17d62b40 {
+  rankdir="TB";
+  p0x510[label="allocate_a"];
+  p0x510 -> p0xdc0;
+  p0xc10[label="allocate_b"];
+  p0xc10 -> p0xe90;
+  p0xcf0[label="allocate_c"];
+  p0xcf0 -> p0x100;
+  p0xdc0[label="span_a"];
+  p0xdc0 -> p0x030;
+  p0xe90[label="span_b"];
+  p0xe90 -> p0x030;
+  p0xf60[label="span_c"];
+  p0xf60 -> p0x030;
+  p0x030[label="kernel"];
+  p0x030 -> p0x100;
+  p0x100[label="copy_c"];
+}
+```
+
+
 
 # Compile Unit Tests and Examples
 
@@ -321,6 +453,12 @@ The folder [examples/](./examples) contains a number of practical CPU-GPU applic
 To use Heteroflow, you need a [Nvidia's CUDA Compiler (NVCC)][nvcc] 
 of version at least 9.0 to support C++14 standards.
 
+# Get Involved
+
++ Report bugs/issues by submitting a [GitHub issue][GitHub issues]
++ Submit contributions using [pull requests][GitHub pull requests]
++ Visit a curated list of [awesome parallel computing resources](https://github.com/tsung-wei-huang/awesome-parallel-computing)
+
 # License
 
 Heteroflow is licensed under the [MIT License](./LICENSE).
@@ -334,3 +472,9 @@ Heteroflow is licensed under the [MIT License](./LICENSE).
 [cuda-zone]:             https://developer.nvidia.com/cuda-zone
 [nvcc]:                  https://developer.nvidia.com/cuda-llvm-compiler
 
+[GitHub issues]:         https://github.com/heteroflow/heteroflow/issues
+[GitHub insights]:       https://github.com/heteroflow/heteroflow/pulse
+[GitHub pull requests]:  https://github.com/heteroflow/heteroflow/pulls
+
+[dot-format]:            https://en.wikipedia.org/wiki/DOT_(graph_description_language)
+[GraphViz]:              https://www.graphviz.org/

@@ -323,11 +323,11 @@ inline void Node::dump(std::ostream& os) const {
         break;
 
         case cudaMemcpyDeviceToHost:
-          os << " style=filled fillcolor=\"yellow\"";
+          os << " style=filled fillcolor=\"springgreen\"";
         break;
 
         default:
-          os << " style=filled fillcolor=\"springgreen\"";
+          os << " style=filled fillcolor=\"yellow\"";
         break;
       }
     }
