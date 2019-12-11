@@ -323,7 +323,7 @@ A.precede(B);        // A runs before B
 A.precede(C, D, E);  // A runs before C, D, and E
 ```
 
-Or you can add a succeed link to force one task to run after another.
+Or you can add a succeeding link to force one task to run after another.
 
 ```cpp
 A.succeed(B);        // A runs after B
