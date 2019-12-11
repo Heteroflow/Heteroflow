@@ -162,7 +162,7 @@ HostTask FlowBuilder::host(C&& callable) {
   
   // assign the work
   return HostTask(_graph.back().get())
-        .work(std::forward<C>(callable));
+        .host(std::forward<C>(callable));
 }
 
 // Function: span

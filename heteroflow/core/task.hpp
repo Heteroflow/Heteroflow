@@ -242,7 +242,7 @@ class HostTask : public TaskBase<HostTask> {
     @param callable a callable object acceptable to std::function
     */
     template <typename C>
-    HostTask work(C&& callable);
+    HostTask host(C&& callable);
     
   private:
 
@@ -254,7 +254,7 @@ inline HostTask::HostTask(Node* node) :
 }
 
 template <typename C>
-HostTask HostTask::work(C&& callable) {
+HostTask HostTask::host(C&& callable) {
   HF_THROW_IF(!_node, "host task is empty");
   _node->_host_handle().work = std::forward<C>(callable);
   return *this;

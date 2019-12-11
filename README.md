@@ -24,7 +24,7 @@ using modern C++ and [Nvidia CUDA Toolkit][cuda-toolkit].
 
 # Write Your First Heteroflow Program
 
-The following example [saxpy.cu](./examples/saxpy.cu) implements
+The code below [saxpy.cu](./examples/saxpy.cu) implements
 the canonical single-precision A·X Plus Y ("saxpy") operation.
 
 
@@ -96,7 +96,7 @@ Most applications are developed through the following steps:
 
 ## Step 1: Create a Heteroflow Graph
 
-Create a heteroflow object to build a task dependency graph:
+Create a heteroflow object to start a task dependency graph:
 
 ```cpp
 hf::Heteroflow hf;
@@ -119,7 +119,7 @@ hf::HostTask host = heteroflow.host([](){ std::cout << "my host task\n"; });
 ### Task Type #2: Span Task
 
 A span task allocates memory on a GPU device. 
-The following example creates a span task that allocates
+The code below creates a span task that allocates
 256 bytes of an uninitialized storage on a GPU device.
 
 ```cpp
@@ -146,9 +146,11 @@ and multiple GPUs.
  
 ### Task Type #3: Fill Task
 
-A fill task sets GPU memory managed by a span task to a value.
-The following code example creates fill tasks that sets each byte
-to zero in the specified range of a GPU memory block managed by a span task.
+A fill task sets a GPU memory area managed by a span task to a given value
+*byte by byte*.
+The code below creates fill tasks that set each byte
+in the specified range of a GPU memory block managed by a span task
+to zero.
 
 ```cpp
 // sets each byte in [0, 1024) of span to 0
@@ -162,8 +164,8 @@ hf::FillTask fill2 = hf.fill(span, 1000, 20, 0);
 
 A copy task performs data transfers in one of the three directions,
 *host to device* (H2D), *device to device* (D2D), and *device to host* (D2H).
-The following example creates copy tasks that transfer
-data from the host memory area to a GPU memory block managed by a span task.
+The code below creates copy tasks that transfer
+data from a host memory area to a GPU memory block managed by a span task.
 
 ```cpp
 std::string str("H2D data transfers");
@@ -175,7 +177,7 @@ hf::CopyTask h2d1 = hf.copy(span, str.data(), str.size());
 hf::CopyTask h2d2 = hf.copy(span, 10, str.data(), 3);       
 ```
 
-The following example creates copy tasks that transfer
+The code below creates copy tasks that transfer
 data from a GPU memory block managed by a span task to a host memory area.
 
 ```cpp
@@ -188,7 +190,7 @@ hf::CopyTask d2h1 = hf.copy(str.data(), span, 10);
 hf::CopyTask d2h2 = hf.copy(str.data(), span, 5, 10);
 ```
 
-The following example creates copy tasks that transfer data between
+The code below creates copy tasks that transfer data between
 two GPU memory blocks managed by two span tasks.
 
 ```cpp
@@ -214,7 +216,7 @@ to facilitate the design of task scheduling with automatic GPU device mapping.
 Each span task manages a GPU memory pointer that
 will implicitly convert to the pointer type 
 of the corresponding entry in binding a kernel task to a kernel function.
-The example below demonstrates the creation of a kernel task.
+The code below demonstrates the creation of a kernel task.
 
 ```cpp
 // GPU kernel to set each entry of an integer array to a given value
@@ -269,6 +271,46 @@ std::cout << "task is empty? " << (task.empty() ? "yes" : "no");
 std::cout << task.num_successors() << '/' << task.num_dependents();
 ```
 
+### Placeholder Tasks
+
+Sometimes, you may need to initialize a task after its creation.
+Heteroflow allows users to create a *placeholder* for each task type
+with storage allocated in advance.
+
+```cpp
+// creates a placeholder for host task
+hf::HostTask host = tf.placeholder<hf::HostTask>();
+
+// creates a placeholder for span task
+hf::SpanTask span = tf.placeholder<hf::SpanTask>();
+
+// creates a placeholder for fill task
+hf::FillTask fill = tf.placeholder<hf::FillTask>();
+
+// creates a placeholder for copy task
+hf::CopyTask copy = tf.placeholder<hf::CopyTask>();
+
+// creates a placeholder for kernel task
+hf::KernelTask kernel = tf.placeholder<hf::KernelTask>();
+```
+
+Each task handle has exactly the same method as the heteroflow 
+to initialize its content.
+
+```cpp
+host.host([](){}).name("assign an empty lambda");
+span.span(256).name("allocate a 256-byte uninitialized storage");
+fill.fill(span, 0).name("fill the span with 0");
+copy.copy(span, host_ptr, 256).name("copy 256 bytes from host_ptr to span");
+kernel.kernel(1, 256, 0, my_kernel, span, 256).name("offload my_kernel onto a GPU");
+
+host.precede(span);     // span runs after host
+span.precede(fill);     // fill runs after span
+fill.precede(copy);     // copy runs after fill
+copy.precede(kernel);   // kernel runs after copy
+```
+
+
 ## Step 2: Define Task Dependencies
 
 You can add dependency links between tasks to enforce one task to run after another.
@@ -291,19 +333,21 @@ A.succeed(C, D, E);  // A runs after C, D, and E
 ## Step 3: Execute a Heteroflow
 
 To execute a heteroflow, you need to create an *executor*.
-An executor manages a set of worker threads to execute a heteroflow
-and perform automatic computation offloading to GPUs
+An executor manages a set of worker threads to execute 
+dependent tasks in a heteroflow
 through an efficient *work-stealing* algorithm.
 
 ```cpp
-tf::Executor executor;
+hf::Executor executor;
 ```
 
-You can configure an executor with a fixed number threads to
-operate on CPU cores and GPUs.
+You can configure an executor to operate on a fixed number of
+CPU cores and GPUs.
+The code below creates 32 worker threads to schedule and execute CPU tasks
+and 4 worker threads for GPU tasks.
 
 ```cpp
-tf::Executor executor(32, 4);  // 32 CPU cores and 4 GPUs
+hf::Executor executor(32, 4);  // 32 and 4 threads to work on CPU and GPU tasks, respectively
 ```
 
 The executor provides many methods to run a heteroflow.
@@ -318,18 +362,30 @@ std::future<void> r1 = executor.run(heteroflow);       // run the heteroflow onc
 std::future<void> r2 = executor.run_n(heteroflow, 2);  // run the heteroflow twice
 
 // keep running until the predicate becomes true (4 times in this example)
-executor.run_until(taskflow, [counter=4](){ return --counter == 0; } );
+executor.run_until(heteroflow, [counter=4](){ return --counter == 0; } );
 ```
 
-You can call `wait_for_all` to block the executor until all associated taskflows complete.
+You can call `wait_for_all` to block the executor until all associated heteroflows complete.
 
 ```cpp
-executor.wait_for_all();  // blocks until all associated tasks finish
+executor.wait_for_all();  // blocks until all running heteroflows finish
 ```
 
 Notice that executor does not own any heteroflow. 
 It is your responsibility to keep a heteroflow alive during its execution,
 or it can result in undefined behavior.
+For instance, the code below can result in undefined behavior.
+
+```cpp
+hf::Executor executor;
+{
+  hf::Heteroflow scoped_heteroflow;
+  scoped_heteroflow.span(256);
+  // ... build dependent tasks
+  executor.run(scoped_heteroflow);
+}  // scoped_heteroflow is destroyed here while executor might still be running its tasks
+```
+
 In most applications, you need only one executor to run multiple heteroflows
 each representing a specific part of your parallel decomposition.
 
@@ -422,7 +478,7 @@ digraph p0x7ffc17d62b40 {
   p0xe90 -> p0x030;
   p0xf60[label="span_c"];
   p0xf60 -> p0x030;
-  p0x030[label="kernel"];
+  p0x030[label="kernel" shape="box3d"];
   p0x030 -> p0x100;
   p0x100[label="copy_c"];
 }
