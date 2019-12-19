@@ -34,12 +34,23 @@ inline constexpr bool is_pointer_v = std::is_pointer<T>::value;
 namespace hf {
 
 // ----------------------------------------------------------------------------
+// Type
+// ----------------------------------------------------------------------------
+
+enum class Domain {
+  CPU = 0,
+  GPU = 1
+};
+
+// ----------------------------------------------------------------------------
 // Function Traits
 // ----------------------------------------------------------------------------
 
+// we specialize for pointers to member function
+
 template<typename F>
 struct function_traits;
- 
+
 // function pointer
 template<typename R, typename... Args>
 struct function_traits<R(*)(Args...)> : public function_traits<R(Args...)> {
@@ -49,8 +60,25 @@ struct function_traits<R(*)(Args...)> : public function_traits<R(Args...)> {
 template<typename R, typename... Args>
 struct function_traits<R(&)(Args...)> : public function_traits<R(Args...)> {
 };
- 
- // function_traits
+
+// for operator ()
+template <typename T>
+struct function_traits : public function_traits<decltype(&T::operator())>{
+};
+
+// immutable operator
+template <typename C, typename R, typename... Args>
+struct function_traits<R(C::*)(Args...) const> :
+  public function_traits<R(Args...)> {
+};
+
+// mutable operator
+template <typename C, typename R, typename... Args>
+struct function_traits<R(C::*)(Args...)> :
+  public function_traits<R(Args...)> {
+};
+
+// function_traits
 template<typename R, typename... Args>
 struct function_traits<R(Args...)> {
 
@@ -68,6 +96,7 @@ struct function_traits<R(Args...)> {
   template <size_t N>
   using argument_t = typename argument<N>::type;
 };
+
 
 // ----------------------------------------------------------------------------
 // Stateful Tuple

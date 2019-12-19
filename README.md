@@ -5,8 +5,7 @@ concurrent CPU-GPU programs using task models
 
 # Why Heteroflow?
 
-Parallel CPU-GPU programming is never an easy job 
-because of many difficult concurrency details.
+Parallel CPU-GPU programming is never an easy job to begin with.
 Heteroflow helps you deal with this challenge 
 through a new *task-based* programming model
 using modern C++ and [Nvidia CUDA Toolkit][cuda-toolkit].

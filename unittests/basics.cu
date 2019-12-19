@@ -133,7 +133,7 @@ TEST_CASE("host-tasks" * doctest::timeout(300)) {
       }
 
       for(auto& host : hosts) {
-        host.work([&counter](){ counter++; });
+        host.host([&counter](){ counter++; });
       }
 
       executor.run(heteroflow).get();
@@ -986,10 +986,6 @@ TEST_CASE("dependent-kernels" * doctest::timeout(300)) {
           }
         }
       }
-
-      hf.dump(std::cout);
-
-      return;
 
       executor.run(hf).wait();
 

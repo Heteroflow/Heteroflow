@@ -10,7 +10,7 @@ class Topology;
 
 // Class: Node
 class Node {
-    
+
   template <typename Drvied>
   friend class TaskBase;
 
@@ -78,7 +78,6 @@ class Node {
     bool is_fill() const;
     bool is_span() const;
     bool is_kernel() const;
-		bool is_device() const;
 
     void dump(std::ostream&) const;
 
@@ -86,6 +85,8 @@ class Node {
 
     size_t num_successors() const;
     size_t num_dependents() const;
+
+    Domain domain() const;
 
   private:
 
@@ -230,6 +231,28 @@ inline size_t Node::num_dependents() const {
   return _dependents.size();
 }
 
+// Function: domain
+inline Domain Node::domain() const {
+
+  Domain domain;
+
+  switch(_handle.index()) {
+
+    case SPAN_IDX:
+    case COPY_IDX:
+    case KERNEL_IDX:
+    case FILL_IDX:
+      domain = Domain::GPU;
+    break;
+
+    default:
+      domain = Domain::CPU;
+    break;
+  }
+
+  return domain;
+}
+
 // Function: is_host
 inline bool Node::is_host() const {
   return _handle.index() == HOST_IDX;
@@ -253,11 +276,6 @@ inline bool Node::is_fill() const {
 // Function: is_kernel
 inline bool Node::is_kernel() const {
   return _handle.index() == KERNEL_IDX;
-}
-
-// Function: is_device
-inline bool Node::is_device() const {
-  return (is_copy() || is_span() || is_kernel() || is_fill());
 }
 
 // Function: _root
@@ -359,70 +377,3 @@ inline void Node::dump(std::ostream& os) const {
 
 }  // end of namespace hf -----------------------------------------------------
 
-
-
-
-
-
-/*// Procedure: _d2h
-inline void CopyTask::_d2h(
-  void* tgt, SpanTask src, size_t offset, size_t bytes, cudaStream_t stream
-) {
-
-  auto& s = src._node->_span_handle();
-
-  auto ptr = static_cast<char*>(s.d_data) + offset;
-
-  HF_CHECK_CUDA(
-    cudaMemcpyAsync(
-      tgt, ptr, bytes, cudaMemcpyDeviceToHost, stream
-    ),
-    "copy (D2H) task '", name(), "' failed\n",
-    "target host/size: ", tgt, '/', bytes, '\n',
-    "source span/size/offset: ", s.d_data, '/', s.d_size, '/', offset
-  );
-}
-
-// Procedure: _h2d
-inline void CopyTask::_h2d(
-  SpanTask tgt, size_t offset, void* src, size_t bytes, cudaStream_t stream
-) {
-
-  auto& t = tgt._node->_span_handle();
-  
-  auto ptr = static_cast<char*>(t.d_data) + offset;
-
-  HF_CHECK_CUDA(
-    cudaMemcpyAsync(
-      ptr, src, bytes, cudaMemcpyHostToDevice, stream
-    ),
-    "copy (H2D) task '", name(), "' failed\n",
-    "target span/size/offset: ", t.d_data, '/', t.d_size, '/', offset, '\n',
-    "source host/size: ", src, '/', bytes
-  );
-}
-
-// Procedure: _d2d
-inline void CopyTask::_d2d(
-  SpanTask tgt, size_t t_offset, 
-  SpanTask src, size_t s_offset, 
-  size_t bytes,
-  cudaStream_t stream
-) {
-    
-  auto& t = tgt._node->_span_handle();
-  auto& s = src._node->_span_handle();
-    
-  auto tptr = static_cast<char*>(t.d_data) + t_offset;
-  auto sptr = static_cast<char*>(s.d_data) + s_offset;
-    
-  HF_CHECK_CUDA(
-    cudaMemcpyAsync(
-      tptr, sptr, bytes, cudaMemcpyDeviceToDevice, stream
-    ),
-    "copy (D2D) task '", name(), "' failed\n",
-    "target span/size/offset: ", t.d_data, '/', t.d_size, '/', t_offset, '\n',
-    "source span/size/offset: ", s.d_data, '/', s.d_size, '/', s_offset, '\n',
-    "bytes to copy: ", bytes
-  );
-}*/
